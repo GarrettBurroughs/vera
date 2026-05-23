@@ -16,6 +16,8 @@ pub struct HirFunc {
     pub name: String,
     pub ret_type: HirType,
     pub body: HirBlock,
+    pub requires: Vec<HirExpr>,
+    pub ensures: Vec<HirExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +30,8 @@ pub enum HirStmt {
     Let(String, bool, HirType, HirExpr), // name, is_const, type, initializer
     Expr(HirExpr),
     Return(Option<HirExpr>),
+    Assert(HirExpr),
+    Assume(HirExpr),
     Error,
 }
 

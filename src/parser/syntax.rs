@@ -10,12 +10,11 @@ pub enum SyntaxKind {
     KwImport, KwAs, KwPub, KwStruct, KwEnum, KwVariant, KwFunc, KwPure,
     KwType, KwTrait, KwImpl, KwFor, KwConst, KwVar, KwIf, KwElse, KwWhile,
     KwIn, KwReturn, KwBreak, KwContinue, KwGhost, KwMatch, KwCase, KwUnsafe,
+    KwSpec, KwRequires, KwEnsures, KwAssert, KwAssume, KwAssigns, KwInvariant, KwDecreases,
     
     TyBool, TyI8, TyI16, TyI32, TyI64, TyU8, TyU16, TyU32, TyU64,
     TyW8, TyW16, TyW32, TyW64, TyF32, TyF64, TyChar, TyVoid, TyString,
     TyArray, TySlice, TyRef, TyPtr, KwMut,
-    
-    KwSpec, KwRequires, KwEnsures, KwAssigns, KwInvariant, KwDecreases,
     
     Eq, EqEq, BangEq, Less, Greater, LessEq, GreaterEq, Plus, Minus,
     Star, Slash, Percent, Bang, Amp, AmpAmp, PipePipe, Implies, Iff,
@@ -41,6 +40,11 @@ pub enum SyntaxKind {
     CONDITION,
     NAME_REF,
     LITERAL,
+    SPEC_BLOCK,
+    REQUIRES_CLAUSE,
+    ENSURES_CLAUSE,
+    ASSERT_STMT,
+    ASSUME_STMT,
     ERROR_NODE,
 }
 
@@ -100,6 +104,8 @@ impl From<Token> for SyntaxKind {
             Token::KwSpec => SyntaxKind::KwSpec,
             Token::KwRequires => SyntaxKind::KwRequires,
             Token::KwEnsures => SyntaxKind::KwEnsures,
+            Token::KwAssert => SyntaxKind::KwAssert,
+            Token::KwAssume => SyntaxKind::KwAssume,
             Token::KwAssigns => SyntaxKind::KwAssigns,
             Token::KwInvariant => SyntaxKind::KwInvariant,
             Token::KwDecreases => SyntaxKind::KwDecreases,

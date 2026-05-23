@@ -145,6 +145,10 @@ impl<'a> Parser<'a> {
             self.parse_type();
         }
         
+        if self.at(SyntaxKind::KwSpec) {
+            self.parse_spec_block();
+        }
+        
         self.parse_block();
         self.finish_node();
     }
@@ -172,6 +176,34 @@ impl<'a> Parser<'a> {
         self.finish_node();
     }
     
+    fn parse_spec_block(&mut self) {
+        self.start_node(SyntaxKind::SPEC_BLOCK);
+        self.expect(SyntaxKind::KwSpec);
+        self.expect(SyntaxKind::LBrace);
+        
+        while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+            if self.at(SyntaxKind::KwRequires) {
+                self.start_node(SyntaxKind::REQUIRES_CLAUSE);
+                self.advance();
+                self.parse_expr();
+                self.expect(SyntaxKind::Semi);
+                self.finish_node();
+            } else if self.at(SyntaxKind::KwEnsures) {
+                self.start_node(SyntaxKind::ENSURES_CLAUSE);
+                self.advance();
+                self.parse_expr();
+                self.expect(SyntaxKind::Semi);
+                self.finish_node();
+            } else {
+                self.error("Expected requires or ensures");
+                self.advance();
+            }
+        }
+        
+        self.expect(SyntaxKind::RBrace);
+        self.finish_node();
+    }
+
     fn parse_stmt(&mut self) {
         if self.at(SyntaxKind::KwReturn) {
             self.parse_return_stmt();
@@ -179,6 +211,18 @@ impl<'a> Parser<'a> {
             self.parse_let_stmt();
         } else if self.at(SyntaxKind::KwIf) {
             self.parse_if_expr();
+        } else if self.at(SyntaxKind::KwAssert) {
+            self.start_node(SyntaxKind::ASSERT_STMT);
+            self.advance();
+            self.parse_expr();
+            self.expect(SyntaxKind::Semi);
+            self.finish_node();
+        } else if self.at(SyntaxKind::KwAssume) {
+            self.start_node(SyntaxKind::ASSUME_STMT);
+            self.advance();
+            self.parse_expr();
+            self.expect(SyntaxKind::Semi);
+            self.finish_node();
         } else {
             self.parse_expr_stmt();
         }
@@ -390,5 +434,24 @@ mod tests {
         let parser = Parser::new(input);
         let (_, errors) = parser.parse();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_spec_and_assert() {
+        let input = r#"
+            func verify_math(): i32
+            spec {
+                requires 1 > 0;
+                ensures true;
+            }
+            {
+                assert 1 > 0;
+                assume 1 == 1;
+                return 1;
+            }
+        "#;
+        let parser = Parser::new(input);
+        let (_, errors) = parser.parse();
+        assert!(errors.is_empty(), "Parse errors: {:?}", errors);
     }
 }

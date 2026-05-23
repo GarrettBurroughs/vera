@@ -91,6 +91,9 @@ impl<'ctx> CodeGen<'ctx> {
             HirStmt::Expr(expr) => {
                 self.compile_expr(expr)?;
             }
+            HirStmt::Assert(_) | HirStmt::Assume(_) => {
+                // Verification statements are erased during code generation.
+            }
             HirStmt::Error => {}
         }
         Ok(())

@@ -4,6 +4,7 @@ mod lexer;
 mod parser;
 mod hir;
 mod backend;
+mod verification;
 use crate::parser::ast::AstNode;
 
 #[derive(Parser)]
@@ -54,6 +55,11 @@ fn main() -> miette::Result<()> {
                 std::process::exit(1);
             }
             
+            if let Err(e) = verification::verify_program(&hir_program) {
+                eprintln!("Verification Error: {:?}", e);
+                std::process::exit(1);
+            }
+            
             let out_bin = output.clone().unwrap_or_else(|| "a.out".to_string());
             backend::compile_to_binary(&hir_program, &out_bin).expect("Failed to compile");
         }
@@ -78,6 +84,11 @@ fn main() -> miette::Result<()> {
             }
             
             if has_errors {
+                std::process::exit(1);
+            }
+            
+            if let Err(e) = verification::verify_program(&hir_program) {
+                eprintln!("Verification Error: {:?}", e);
                 std::process::exit(1);
             }
             

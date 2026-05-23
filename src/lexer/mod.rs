@@ -64,6 +64,8 @@ pub enum Token {
     #[token("assigns")] KwAssigns,
     #[token("invariant")] KwInvariant,
     #[token("decreases")] KwDecreases,
+    #[token("assert")] KwAssert,
+    #[token("assume")] KwAssume,
 
     // Operators and Punctuation
     #[token("=")] Eq,

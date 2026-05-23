@@ -1,0 +1,7 @@
+// run-pass
+
+func main(): i32 {
+    const x: i32 = 42;
+    assert x == 42;
+    return 0;
+}

@@ -101,6 +101,22 @@ impl LoweringContext {
             None => HirType::Void,
         };
         
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        
+        if let Some(spec) = func.spec_block() {
+            for req in spec.requires_clauses() {
+                if let Some(e) = req.expr() {
+                    requires.push(self.lower_expr(&e));
+                }
+            }
+            for ens in spec.ensures_clauses() {
+                if let Some(e) = ens.expr() {
+                    ensures.push(self.lower_expr(&e));
+                }
+            }
+        }
+
         self.enter_scope(); // Function scope
         self.current_func_ret_type = ret_type.clone();
 
@@ -118,6 +134,8 @@ impl LoweringContext {
             name,
             ret_type,
             body,
+            requires,
+            ensures,
         })
     }
 
@@ -198,6 +216,14 @@ impl LoweringContext {
             }
             ast::Stmt::IfExpr(if_expr) => {
                 HirStmt::Expr(self.lower_if_expr(if_expr))
+            }
+            ast::Stmt::AssertStmt(assert_stmt) => {
+                let expr = assert_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                HirStmt::Assert(expr)
+            }
+            ast::Stmt::AssumeStmt(assume_stmt) => {
+                let expr = assume_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                HirStmt::Assume(expr)
             }
         }
     }

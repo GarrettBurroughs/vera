@@ -51,21 +51,31 @@ ast_node!(NameRef, SyntaxKind::NAME_REF);
 ast_node!(Condition, SyntaxKind::CONDITION);
 ast_node!(Literal, SyntaxKind::LITERAL);
 
+ast_node!(SpecBlock, SyntaxKind::SPEC_BLOCK);
+ast_node!(RequiresClause, SyntaxKind::REQUIRES_CLAUSE);
+ast_node!(EnsuresClause, SyntaxKind::ENSURES_CLAUSE);
+ast_node!(AssertStmt, SyntaxKind::ASSERT_STMT);
+ast_node!(AssumeStmt, SyntaxKind::ASSUME_STMT);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Stmt {
+    ReturnStmt(ReturnStmt),
     LetStmt(LetStmt),
     ExprStmt(ExprStmt),
-    ReturnStmt(ReturnStmt),
     IfExpr(IfExpr),
+    AssertStmt(AssertStmt),
+    AssumeStmt(AssumeStmt),
 }
 
 impl Stmt {
     pub fn cast(node: SyntaxNode) -> Option<Self> {
         match node.kind() {
+            SyntaxKind::RETURN_STMT => ReturnStmt::cast(node).map(Stmt::ReturnStmt),
             SyntaxKind::LET_STMT => LetStmt::cast(node).map(Stmt::LetStmt),
             SyntaxKind::EXPR_STMT => ExprStmt::cast(node).map(Stmt::ExprStmt),
-            SyntaxKind::RETURN_STMT => ReturnStmt::cast(node).map(Stmt::ReturnStmt),
             SyntaxKind::IF_EXPR => IfExpr::cast(node).map(Stmt::IfExpr),
+            SyntaxKind::ASSERT_STMT => AssertStmt::cast(node).map(Stmt::AssertStmt),
+            SyntaxKind::ASSUME_STMT => AssumeStmt::cast(node).map(Stmt::AssumeStmt),
             _ => None,
         }
     }
@@ -119,6 +129,10 @@ impl FuncDecl {
 
     pub fn body(&self) -> Option<BlockExpr> {
         self.syntax().children().find_map(BlockExpr::cast)
+    }
+
+    pub fn spec_block(&self) -> Option<SpecBlock> {
+        self.syntax().children().find_map(SpecBlock::cast)
     }
 }
 
@@ -227,6 +241,40 @@ impl ExprStmt {
 }
 
 impl ReturnStmt {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl SpecBlock {
+    pub fn requires_clauses(&self) -> impl Iterator<Item = RequiresClause> {
+        self.syntax().children().filter_map(RequiresClause::cast)
+    }
+    
+    pub fn ensures_clauses(&self) -> impl Iterator<Item = EnsuresClause> {
+        self.syntax().children().filter_map(EnsuresClause::cast)
+    }
+}
+
+impl RequiresClause {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl EnsuresClause {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl AssertStmt {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl AssumeStmt {
     pub fn expr(&self) -> Option<Expr> {
         self.syntax().children().find_map(Expr::cast)
     }
