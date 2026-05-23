@@ -1,0 +1,80 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Vera",
+  "scopeName": "source.vera",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.vera",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.vera",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.vera",
+          "match": "\\b(if|else|while|for|in|return|break|continue|match|case)\\b"
+        },
+        {
+          "name": "keyword.other.vera",
+          "match": "\\b(const|var|func|pure|struct|variant|enum|trait|impl|type|pub|import|as|unsafe|ghost)\\b"
+        },
+        {
+          "name": "keyword.control.verification.vera",
+          "match": "\\b(spec|requires|ensures|assigns|invariant|decreases|forall|exists|choose|assert|assume|check|old|result|valid|valid_read|separated)\\b"
+        },
+        {
+          "name": "constant.language.vera",
+          "match": "\\b(true|false|null)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.vera",
+          "match": "\\b(bool|i8|i16|i32|i64|u8|u16|u32|u64|w8|w16|w32|w64|f32|f64|char|void|string|array|slice|ref|ptr|mut)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.vera",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.vera",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.vera",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    }
+  }
+}

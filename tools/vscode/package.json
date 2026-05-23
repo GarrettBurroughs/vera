@@ -1,0 +1,26 @@
+{
+  "name": "vera",
+  "displayName": "Vera Language",
+  "description": "Syntax highlighting and language support for the Vera programming language.",
+  "version": "0.1.0",
+  "publisher": "vera-lang",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "vera",
+      "aliases": ["Vera", "vera"],
+      "extensions": [".vera"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "vera",
+      "scopeName": "source.vera",
+      "path": "./syntaxes/vera.tmLanguage.json"
+    }]
+  }
+}

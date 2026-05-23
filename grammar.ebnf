@@ -1,0 +1,128 @@
+/* Vera Language Formal EBNF Grammar */
+
+program         = { item } ;
+
+item            = import_decl 
+                | struct_decl 
+                | enum_decl 
+                | variant_decl 
+                | func_decl 
+                | type_alias
+                | trait_decl
+                | impl_decl ;
+
+visibility      = [ "pub" ] ;
+generic_params  = identifier { "," identifier } ;
+
+import_decl     = "import" path [ "as" identifier | "{" identifier_list "}" ] ";" ;
+path            = identifier { "." identifier } ;
+identifier_list = identifier { "," identifier } ;
+
+/* Declarations */
+struct_decl     = [ "@abi(C)" ] visibility "struct" identifier "{" { field_decl "," } [ field_decl ] "}" ;
+field_decl      = visibility identifier ":" type ;
+
+enum_decl       = visibility "enum" identifier "{" { identifier "," } [ identifier ] "}" ;
+
+variant_decl    = [ "@abi(C)" ] visibility "variant" identifier [ "[" generic_params "]" ] "{" { variant_case "," } [ variant_case ] "}" ;
+variant_case    = identifier [ "(" type_list ")" | "{" { field_decl "," } [ field_decl ] "}" ] ;
+type_list       = type { "," type } ;
+
+func_decl       = visibility [ "pure" ] "func" identifier [ "[" generic_params "]" ] "(" params ")" [ ":" type ] [ spec_block ] block ;
+params          = [ param_decl { "," param_decl } ] ;
+param_decl      = identifier ":" type ;
+
+type_alias      = visibility "type" identifier "=" type [ "where" "(" expr ")" ] ";" ;
+
+trait_decl      = visibility "trait" identifier "{" { func_decl_no_body } "}" ;
+func_decl_no_body = [ "pure" ] "func" identifier "(" params ")" [ ":" type ] ";" ;
+
+impl_decl       = "impl" [ identifier "for" ] identifier "{" { func_decl } "}" ;
+
+/* Types */
+type            = primitive_type 
+                | compound_type 
+                | pointer_type 
+                | path [ "[" type_list "]" ] ;
+                
+primitive_type  = "bool" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" 
+                | "w8" | "w16" | "w32" | "w64" | "f32" | "f64" | "char" | "void" | "string" ;
+
+compound_type   = "array" "[" type "," int_literal "]" 
+                | [ "mut" ] "slice" "[" type "]" ;
+
+pointer_type    = [ "mut" ] "ref" type 
+                | [ "mut" ] "ptr" type ;
+
+/* Blocks and Statements */
+block           = "{" { stmt } "}" ;
+stmt            = let_stmt 
+                | expr_stmt 
+                | while_loop 
+                | for_loop 
+                | return_stmt 
+                | break_stmt 
+                | continue_stmt
+                | ghost_block ;
+
+let_stmt        = ( "const" | "var" ) identifier [ ":" type ] "=" expr ";" ;
+expr_stmt       = expr ";" ;
+return_stmt     = "return" [ expr ] ";" ;
+break_stmt      = "break" ";" ;
+continue_stmt   = "continue" ";" ;
+ghost_block     = "ghost" block ;
+
+while_loop      = "while" expr [ spec_block ] block ;
+for_loop        = "for" identifier "in" expr ".." [ "=" ] expr [ spec_block ] block ;
+
+/* Expressions */
+expr            = assignment_expr ;
+assignment_expr = logic_expr [ "=" assignment_expr ] ;
+logic_expr      = equality_expr { ( "&&" | "||" | "==>" | "<==>" ) equality_expr } ;
+equality_expr   = rel_expr { ( "==" | "!=" ) rel_expr } ;
+rel_expr        = add_expr { ( "<" | ">" | "<=" | ">=" ) add_expr } ;
+add_expr        = mul_expr { ( "+" | "-" ) mul_expr } ;
+mul_expr        = unary_expr { ( "*" | "/" | "%" ) unary_expr } ;
+unary_expr      = [ "!" | "-" | "*" | "&" ] postfix_expr ;
+postfix_expr    = primary_expr { "[" expr "]" | "." identifier | "(" [ args ] ")" | "?" } ;
+
+primary_expr    = identifier 
+                | literal 
+                | "(" expr ")" 
+                | if_expr 
+                | match_expr 
+                | unsafe_block
+                | closure_expr ;
+
+args            = expr { "," expr } ;
+if_expr         = "if" expr block [ "else" ( if_expr | block ) ] ;
+match_expr      = "match" expr "{" { match_case "," } [ match_case ] "}" ;
+match_case      = "case" pattern "=>" ( expr | block ) ;
+unsafe_block    = "unsafe" block ;
+closure_expr    = "|" identifier_list "|" expr ;
+
+/* Verification and Specifications */
+spec_block      = "spec" "{" { spec_stmt } "}" ;
+spec_stmt       = requires_stmt 
+                | ensures_stmt 
+                | assigns_stmt 
+                | invariant_stmt 
+                | decreases_stmt ;
+
+requires_stmt   = "requires" expr ";" ;
+ensures_stmt    = "ensures" expr ";" ;
+assigns_stmt    = "assigns" path [ "[" ".." "]" ] ";" ;
+invariant_stmt  = "invariant" expr ";" ;
+decreases_stmt  = "decreases" expr ";" ;
+
+/* Patterns and Literals */
+pattern         = identifier [ "(" pattern_list ")" ] | literal | "_" | range_pattern ;
+pattern_list    = pattern { "," pattern } ;
+range_pattern   = literal ".." [ "=" ] literal ;
+
+literal         = int_literal | float_literal | string_literal | bool_literal ;
+bool_literal    = "true" | "false" ;
+int_literal     = digit { digit } ;
+float_literal   = digit { digit } "." digit { digit } ;
+string_literal  = '"' { any_character } '"' ;
+identifier      = letter { letter | digit | "_" } ;
