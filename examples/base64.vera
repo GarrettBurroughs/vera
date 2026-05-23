@@ -1,0 +1,58 @@
+// 64-character Base64 encoding table
+const BASE64_TABLE: [u8; 64] = [
+    65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, // A-P
+    81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 97, 98, 99, 100, 101, 102, // Q-Z, a-f
+    103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, // g-v
+    119, 120, 121, 122, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 43, 47 // w-z, 0-9, +, /
+];
+
+/// Encodes a slice of bytes into Base64 characters.
+/// To simplify the presentation, it requires input length to be a multiple of 3.
+pub fn base64_encode(input: &[u8], output: &mut [u8]) -> u64
+spec {
+    requires input.len() % 3 == 0;
+    requires output.len() >= (input.len() / 3) * 4;
+    
+    assigns output[..];
+    ensures result == (input.len() / 3) * 4;
+}
+{
+    let mut in_idx: u64 = 0;
+    let mut out_idx: u64 = 0;
+
+    while in_idx < input.len()
+    spec {
+        // Loop invariants tracking range safety
+        invariant in_idx <= input.len();
+        invariant in_idx % 3 == 0;
+        invariant out_idx == (in_idx / 3) * 4;
+        invariant out_idx <= output.len();
+        decreases input.len() - in_idx;
+    }
+    {
+        // Safe access of input block: in_idx, in_idx + 1, in_idx + 2 are verified safe 
+        // because in_idx < input.len() and in_idx % 3 == 0 (implying in_idx + 2 < input.len()).
+        let b0 = input[in_idx];
+        let b1 = input[in_idx + 1];
+        let b2 = input[in_idx + 2];
+
+        // Bit shifts and masking.
+        // SMT solver proves that i0, i1, i2, and i3 are always within the range [0, 63]
+        // because of the bitwise AND operation with 0x3F (63).
+        let i0 = (b0 >> 2) & 0x3F;
+        let i1 = (((b0 & 0x03) << 4) | (b1 >> 4)) & 0x3F;
+        let i2 = (((b1 & 0x0F) << 2) | (b2 >> 6)) & 0x3F;
+        let i3 = b2 & 0x3F;
+
+        // Prover guarantees that these assignments are bounds-safe for output and BASE64_TABLE.
+        output[out_idx]     = BASE64_TABLE[i0 as u64];
+        output[out_idx + 1] = BASE64_TABLE[i1 as u64];
+        output[out_idx + 2] = BASE64_TABLE[i2 as u64];
+        output[out_idx + 3] = BASE64_TABLE[i3 as u64];
+
+        in_idx = in_idx + 3;
+        out_idx = out_idx + 4;
+    }
+
+    return out_idx;
+}

@@ -1,0 +1,116 @@
+struct BstNode {
+    key: i32,
+    left: Option<Box<BstNode>>,
+    right: Option<Box<BstNode>>,
+}
+
+/// Helper ghost logic checking if a tree node recursively obeys BST boundaries.
+ghost fn is_bst_bounded(node: &Option<Box<BstNode>>, min: Option<i32>, max: Option<i32>) -> bool
+spec {
+    decreases node;
+}
+{
+    match node {
+        Option::Some(n) => {
+            let key_ok = match min {
+                Option::Some(min_v) => n.key > min_v,
+                Option::None => true,
+            } && match max {
+                Option::Some(max_v) => n.key < max_v,
+                Option::None => true,
+            };
+            
+            key_ok && 
+            is_bst_bounded(&n.left, min, Option::Some(n.key)) &&
+            is_bst_bounded(&n.right, Option::Some(n.key), max)
+        },
+        Option::None => true,
+    }
+}
+
+/// Core BST predicate. Automatically promoted to logic.
+pub ghost fn is_bst(node: &Option<Box<BstNode>>) -> bool {
+    return is_bst_bounded(node, Option::None, Option::None);
+}
+
+pub struct BinarySearchTree {
+    root: Option<Box<BstNode>>,
+
+    // Struct invariant: the tree structure must always preserve BST ordering.
+    invariant is_bst(&root);
+}
+
+impl BinarySearchTree {
+    /// Creates a new empty Binary Search Tree.
+    pub fn new() -> BinarySearchTree
+    spec {
+        ensures is_bst(&result.root);
+    }
+    {
+        return BinarySearchTree { root: Option::None };
+    }
+
+    /// Checks if a key exists in the tree.
+    pub fn contains(self: &BinarySearchTree, key: i32) -> bool {
+        return contains_node(&self.root, key);
+    }
+
+    /// Inserts a key into the tree, maintaining ordering.
+    pub fn insert(self: &mut BinarySearchTree, key: i32)
+    spec {
+        assigns self.root;
+    }
+    {
+        insert_node(&mut self.root, key);
+    }
+}
+
+/// Recursive helper to query keys. Prover verifies path safety using BST invariants.
+fn contains_node(node: &Option<Box<BstNode>>, key: i32) -> bool
+spec {
+    requires is_bst(node);
+}
+{
+    match node {
+        Option::Some(n) => {
+            if key == n.key {
+                return true;
+            } else if key < n.key {
+                return contains_node(&n.left, key);
+            } else {
+                return contains_node(&n.right, key);
+            }
+        }
+        Option::None => {
+            return false;
+        }
+    }
+}
+
+/// Recursive helper to insert a node. Prover verifies that the structural BST invariant is preserved.
+fn insert_node(node: &mut Option<Box<BstNode>>, key: i32)
+spec {
+    requires is_bst(node);
+    assigns *node;
+    ensures is_bst(node);
+}
+{
+    match node {
+        Option::Some(n) => {
+            if key == n.key {
+                return; // Key already exists
+            } else if key < n.key {
+                insert_node(&mut n.left, key);
+            } else {
+                insert_node(&mut n.right, key);
+            }
+        }
+        Option::None => {
+            *node = Option::Some(Box::new(BstNode {
+                key: key,
+                left: Option::None,
+                right: Option::None,
+            }));
+        }
+    }
+}

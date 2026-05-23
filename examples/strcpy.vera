@@ -1,0 +1,67 @@
+/// Ghost predicate defining if a raw pointer is a valid null-terminated C string.
+ghost fn is_null_terminated(ptr: *const u8) -> bool {
+    exists(len: u64) { valid_read(ptr..ptr.add(len + 1)) && *ptr.add(len) == 0 }
+}
+
+/// Ghost logic function to determine the length of a null-terminated C string.
+ghost fn strlen_logic(ptr: *const u8) -> u64
+spec {
+    requires is_null_terminated(ptr);
+}
+{
+    // Evaluates to the index of the first null-terminator.
+    // 'choose' evaluates to the unique value satisfying the condition.
+    choose(len: u64) { *ptr.add(len) == 0 && forall(i in 0..len) { *ptr.add(i) != 0 } }
+}
+
+/// Safely copies a null-terminated string from `src` to `dest`.
+/// Conforms to the C ABI and can be linked as `strcpy`.
+#[no_mangle]
+pub unsafe extern "C" fn vera_strcpy(dest: *mut u8, src: *const u8) -> *mut u8
+spec {
+    requires is_null_terminated(src);
+    
+    // We let-bind the length in the contract context for readability.
+    let len = strlen_logic(src);
+    
+    // Preconditions: dest buffer must have enough space, and src and dest must not overlap.
+    requires valid(dest..dest.add(len + 1));
+    requires separated(dest..dest.add(len + 1), src..src.add(len + 1));
+    
+    // Framing contract: we only write to the destination buffer range.
+    assigns dest..dest.add(len + 1);
+    
+    // Postconditions: dest is null-terminated, has the same length, matches src, and returns dest.
+    ensures is_null_terminated(dest);
+    ensures strlen_logic(dest) == len;
+    ensures forall(i in 0..=len) { *dest.add(i) == *src.add(i) };
+    ensures result == dest;
+}
+{
+    let mut i: u64 = 0;
+    let len = strlen_logic(src);
+    
+    while true
+    spec {
+        // Loop invariant: we have copied all characters up to index i correctly.
+        invariant i <= len;
+        invariant forall(j in 0..i) { *dest.add(j) == *src.add(j) };
+        invariant forall(j in 0..i) { *dest.add(j) != 0 };
+        
+        assigns i, dest..dest.add(len + 1);
+        decreases len - i;
+    }
+    {
+        // Dereferencing raw pointers requires an unsafe block.
+        unsafe {
+            let val = *src.add(i);
+            *dest.add(i) = val;
+            if val == 0 {
+                break;
+            }
+        }
+        i = i + 1;
+    }
+    
+    return dest;
+}

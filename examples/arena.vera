@@ -1,0 +1,91 @@
+pub struct Arena {
+    buffer: *mut u8,
+    capacity: u64,
+    offset: u64,
+
+    // Invariant: the buffer is valid and the offset is always within capacity limits.
+    invariant capacity > 0;
+    invariant offset <= capacity;
+    invariant buffer != null ==> valid(buffer..buffer.add(capacity));
+}
+
+impl Arena {
+    /// Initializes an Arena using a pre-allocated raw memory buffer.
+    pub fn new(buf: *mut u8, cap: u64) -> Arena
+    spec {
+        requires buf != null ==> valid(buf..buf.add(cap));
+        ensures result.buffer == buf;
+        ensures result.capacity == cap;
+        ensures result.offset == 0;
+    }
+    {
+        return Arena {
+            buffer: buf,
+            capacity: cap,
+            offset: 0,
+        };
+    }
+
+    /// Allocates a block of memory with a specific size and power-of-two alignment constraint.
+    pub fn alloc(
+        self: &mut Arena, 
+        size: u64, 
+        align: { a: u64 where a == 1 || a == 2 || a == 4 || a == 8 || a == 16 || a == 32 || a == 64 }
+    ) -> Option<*mut u8>
+    spec {
+        assigns self.offset;
+        
+        // Postcondition: returns a valid pointer aligned to the requested boundary, or None on OOM
+        ensures match result {
+            Option::Some(ptr) => {
+                // SMT prover verifies that the returned ptr is within the buffer's bounds
+                valid(ptr..ptr.add(size)) &&
+                self.offset <= self.capacity &&
+                ptr as u64 % align == 0
+            },
+            Option::None => self.offset == old(self.offset),
+        };
+    }
+    {
+        if self.buffer == null {
+            return Option::None;
+        }
+
+        let raw_addr = self.buffer as u64 + self.offset;
+        
+        // Compute alignment padding
+        let rem = raw_addr % align;
+        let padding = if rem == 0 {
+            0
+        } else {
+            align - rem
+        };
+
+        // Prevent overflow checks during allocation math
+        if self.offset + padding > self.capacity {
+            return Option::None;
+        }
+        
+        let alloc_offset = self.offset + padding;
+        if alloc_offset + size > self.capacity {
+            return Option::None;
+        }
+
+        // Pointer addition is verified safe because buffer..buffer.add(capacity) is valid
+        let ptr = unsafe { self.buffer.add(alloc_offset) };
+        
+        self.offset = alloc_offset + size;
+        
+        return Option::Some(ptr);
+    }
+
+    /// Resets the allocator bump pointer back to zero, reclaiming all memory.
+    pub fn reset(self: &mut Arena)
+    spec {
+        assigns self.offset;
+        ensures self.offset == 0;
+    }
+    {
+        self.offset = 0;
+    }
+}
