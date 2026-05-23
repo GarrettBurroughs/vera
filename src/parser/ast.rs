@@ -1,30 +1,104 @@
-use super::syntax::{SyntaxNode, SyntaxKind};
+use super::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
-#[derive(Debug)]
-pub struct FuncDecl {
-    pub name: String,
-    pub ret_type: String,
-    pub body_ret_val: i64,
+pub trait AstNode {
+    fn can_cast(kind: SyntaxKind) -> bool;
+    fn cast(node: SyntaxNode) -> Option<Self>
+    where
+        Self: Sized;
+    fn syntax(&self) -> &SyntaxNode;
 }
 
-/// A temporary AST extractor to bridge the gap between Phase 2 CST generation 
-/// and Phase 3 HIR/Backend generation.
-pub fn extract_func_decl(root: &SyntaxNode) -> Option<FuncDecl> {
-    let func_node = root.children().find(|n| n.kind() == SyntaxKind::FUNC_DECL)?;
+macro_rules! ast_node {
+    ($name:ident, $kind:expr) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        pub struct $name(SyntaxNode);
+
+        impl AstNode for $name {
+            fn can_cast(kind: SyntaxKind) -> bool {
+                kind == $kind
+            }
+            fn cast(node: SyntaxNode) -> Option<Self> {
+                if Self::can_cast(node.kind()) {
+                    Some(Self(node))
+                } else {
+                    None
+                }
+            }
+            fn syntax(&self) -> &SyntaxNode {
+                &self.0
+            }
+        }
+    };
+}
+
+ast_node!(SourceFile, SyntaxKind::SOURCE_FILE);
+ast_node!(FuncDecl, SyntaxKind::FUNC_DECL);
+ast_node!(ParamList, SyntaxKind::PARAM_LIST);
+ast_node!(Param, SyntaxKind::PARAM);
+ast_node!(TypeRef, SyntaxKind::TYPE_REF);
+ast_node!(BlockExpr, SyntaxKind::BLOCK_EXPR);
+ast_node!(ReturnStmt, SyntaxKind::RETURN_STMT);
+
+// Accessor methods for AST Nodes
+
+impl SourceFile {
+    pub fn functions(&self) -> impl Iterator<Item = FuncDecl> {
+        self.syntax().children().filter_map(FuncDecl::cast)
+    }
+}
+
+impl FuncDecl {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find(|it| it.kind() == SyntaxKind::Ident)
+    }
     
-    let name = func_node.children_with_tokens().find_map(|it| {
-        if it.kind() == SyntaxKind::Ident { Some(it.into_token()?.text().to_string()) } else { None }
-    })?;
+    pub fn param_list(&self) -> Option<ParamList> {
+        self.syntax().children().find_map(ParamList::cast)
+    }
+
+    pub fn ret_type(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+
+    pub fn body(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
+    }
+}
+
+impl TypeRef {
+    pub fn as_string(&self) -> Option<String> {
+        // Find the first token inside TYPE_REF that represents the type name
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find(|it| !matches!(it.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment))
+            .map(|it| it.text().to_string())
+    }
+}
+
+impl BlockExpr {
+    pub fn statements(&self) -> impl Iterator<Item = SyntaxNode> {
+        self.syntax().children().filter(|n| {
+            matches!(
+                n.kind(),
+                SyntaxKind::RETURN_STMT
+            )
+        })
+    }
     
-    let ret_type = "i32".to_string();
-    
-    let block = func_node.children().find(|n| n.kind() == SyntaxKind::BLOCK_EXPR)?;
-    let ret_stmt = block.children().find(|n| n.kind() == SyntaxKind::RETURN_STMT)?;
-    let int_lit = ret_stmt.children_with_tokens().find_map(|it| {
-        if it.kind() == SyntaxKind::IntLit { Some(it.into_token()?.text().to_string()) } else { None }
-    })?;
-    
-    let body_ret_val = int_lit.parse().unwrap_or(0);
-    
-    Some(FuncDecl { name, ret_type, body_ret_val })
+    pub fn return_stmt(&self) -> Option<ReturnStmt> {
+        self.syntax().children().find_map(ReturnStmt::cast)
+    }
+}
+
+impl ReturnStmt {
+    pub fn expr_token(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find(|it| matches!(it.kind(), SyntaxKind::IntLit | SyntaxKind::FloatLit | SyntaxKind::Ident | SyntaxKind::BoolTrue | SyntaxKind::BoolFalse))
+    }
 }

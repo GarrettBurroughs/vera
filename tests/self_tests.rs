@@ -17,8 +17,11 @@ mod tests {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("vera") {
                 let content = std::fs::read_to_string(&path).unwrap();
-                if content.contains("// run-pass") {
-                    let mut expected_code = 0;
+                let is_pass = content.contains("// run-pass");
+                let is_fail = content.contains("// verify-fail") || content.contains("// compile-fail");
+                
+                if is_pass || is_fail {
+                    let mut expected_code = if is_fail { 1 } else { 0 };
                     for line in content.lines() {
                         if let Some(idx) = line.find("// expect-exit-code: ") {
                             let num_str = &line[idx + 21..].trim();

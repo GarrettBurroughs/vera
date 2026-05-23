@@ -40,14 +40,16 @@ impl<'a> Parser<'a> {
     pub fn parse(mut self) -> (SyntaxNode, Vec<String>) {
         self.start_node(SyntaxKind::SOURCE_FILE);
         
+        self.eat_trivia();
         while self.cursor < self.tokens.len() {
-            // Very simplified parser for Phase 2 slice
-            if self.at(SyntaxKind::KwFunc) {
+            // Very simplified parser for Phase 2/3 slice
+            if self.at(SyntaxKind::KwFunc) || self.at(SyntaxKind::KwPub) {
                 self.parse_func();
             } else {
                 self.error("Expected function declaration");
                 self.advance(); // recover
             }
+            self.eat_trivia();
         }
         
         self.finish_node();
@@ -111,6 +113,11 @@ impl<'a> Parser<'a> {
     
     fn parse_func(&mut self) {
         self.start_node(SyntaxKind::FUNC_DECL);
+        
+        if self.at(SyntaxKind::KwPub) {
+            self.advance();
+        }
+        
         self.expect(SyntaxKind::KwFunc);
         self.expect(SyntaxKind::Ident);
         self.expect(SyntaxKind::LParen);
@@ -127,7 +134,7 @@ impl<'a> Parser<'a> {
     
     fn parse_type(&mut self) {
         self.start_node(SyntaxKind::TYPE_REF);
-        if self.at(SyntaxKind::TyI32) {
+        if self.at(SyntaxKind::TyI32) || self.at(SyntaxKind::TyBool) {
             self.advance();
         } else {
             self.error("Expected type");
@@ -156,7 +163,7 @@ impl<'a> Parser<'a> {
     fn parse_return_stmt(&mut self) {
         self.start_node(SyntaxKind::RETURN_STMT);
         self.expect(SyntaxKind::KwReturn);
-        if self.at(SyntaxKind::IntLit) {
+        if self.at(SyntaxKind::IntLit) || self.at(SyntaxKind::BoolTrue) || self.at(SyntaxKind::BoolFalse) {
             self.advance();
         } else {
             self.error("Expected expression");
@@ -192,6 +199,7 @@ mod tests {
     fn test_parse_pub_func() {
         let input = "pub func main(): i32 { return 42; }";
         let parser = Parser::new(input);
-        let (_, _) = parser.parse();
+        let (_, errors) = parser.parse();
+        assert!(errors.is_empty());
     }
 }

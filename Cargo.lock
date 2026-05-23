@@ -622,6 +622,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "rowan",
+ "thiserror",
 ]
 
 [[package]]

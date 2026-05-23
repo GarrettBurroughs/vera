@@ -4,6 +4,7 @@ mod lexer;
 mod parser;
 mod hir;
 mod backend;
+use crate::parser::ast::AstNode;
 
 #[derive(Parser)]
 #[command(name = "vera")]
@@ -33,25 +34,55 @@ fn main() -> miette::Result<()> {
             let input = std::fs::read_to_string(file).expect("Failed to read file");
             let parser = parser::Parser::new(&input);
             let (cst, errors) = parser.parse();
+            let mut has_errors = false;
+            
             if !errors.is_empty() {
                 for err in errors { eprintln!("Parse Error: {}", err); }
+                has_errors = true;
             }
-            let ast = parser::ast::extract_func_decl(&cst).expect("Failed to map CST to AST");
+            
+            let source_file = parser::ast::SourceFile::cast(cst).expect("Root is not a SourceFile");
+            let mut lower_ctx = hir::lower::LoweringContext::new();
+            let hir_program = lower_ctx.lower_program(&source_file);
+            
+            if !lower_ctx.errors.is_empty() {
+                for err in lower_ctx.errors { eprintln!("Semantic Error: {}", err); }
+                has_errors = true;
+            }
+            
+            if has_errors {
+                std::process::exit(1);
+            }
             
             let out_bin = output.clone().unwrap_or_else(|| "a.out".to_string());
-            backend::compile_to_binary(&ast, &out_bin).expect("Failed to compile");
+            backend::compile_to_binary(&hir_program, &out_bin).expect("Failed to compile");
         }
         Commands::Run { file } => {
             let input = std::fs::read_to_string(file).expect("Failed to read file");
             let parser = parser::Parser::new(&input);
             let (cst, errors) = parser.parse();
+            let mut has_errors = false;
+            
             if !errors.is_empty() {
                 for err in errors { eprintln!("Parse Error: {}", err); }
+                has_errors = true;
             }
-            let ast = parser::ast::extract_func_decl(&cst).expect("Failed to map CST to AST");
+            
+            let source_file = parser::ast::SourceFile::cast(cst).expect("Root is not a SourceFile");
+            let mut lower_ctx = hir::lower::LoweringContext::new();
+            let hir_program = lower_ctx.lower_program(&source_file);
+            
+            if !lower_ctx.errors.is_empty() {
+                for err in lower_ctx.errors { eprintln!("Semantic Error: {}", err); }
+                has_errors = true;
+            }
+            
+            if has_errors {
+                std::process::exit(1);
+            }
             
             let out_bin = "./.tmp.vera.out";
-            backend::compile_to_binary(&ast, out_bin).expect("Failed to compile");
+            backend::compile_to_binary(&hir_program, out_bin).expect("Failed to compile");
             
             let status = std::process::Command::new(out_bin)
                 .status()

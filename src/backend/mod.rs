@@ -1,26 +1,37 @@
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::OptimizationLevel;
-use crate::parser::ast::FuncDecl;
+use crate::hir::{HirProgram, HirStmt, HirExpr};
 
-pub fn compile_to_binary(ast: &FuncDecl, output_path: &str) -> Result<(), String> {
+pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), String> {
     let context = Context::create();
     let module = context.create_module("main_module");
     let builder = context.create_builder();
     
     let i32_type = context.i32_type();
-    let fn_type = i32_type.fn_type(&[], false);
     
-    let function = module.add_function(&ast.name, fn_type, None);
-    let basic_block = context.append_basic_block(function, "entry");
-    
-    builder.position_at_end(basic_block);
-    
-    let ret_val = i32_type.const_int(ast.body_ret_val as u64, false);
-    builder.build_return(Some(&ret_val)).unwrap();
-    
-    if !function.verify(true) {
-        return Err("Function verification failed".to_string());
+    for func in &hir.functions {
+        let fn_type = i32_type.fn_type(&[], false); // Assume all return i32 for now
+        let function = module.add_function(&func.name, fn_type, None);
+        let basic_block = context.append_basic_block(function, "entry");
+        
+        builder.position_at_end(basic_block);
+        
+        // Find return statement
+        let mut ret_val = 0;
+        for stmt in &func.body.statements {
+            if let HirStmt::Return(Some(HirExpr::IntLiteral(val, _))) = stmt {
+                ret_val = *val;
+                break;
+            }
+        }
+        
+        let llvm_ret = i32_type.const_int(ret_val as u64, false);
+        builder.build_return(Some(&llvm_ret)).unwrap();
+        
+        if !function.verify(true) {
+            return Err("Function verification failed".to_string());
+        }
     }
     
     Target::initialize_all(&InitializationConfig::default());
