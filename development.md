@@ -89,3 +89,18 @@ A compiler's reliability is paramount. The testing infrastructure is broken down
 ### Example Integration (End-to-End)
 * Located in `examples/`.
 * The `self_tests.rs` runner also verifies that all full-scale examples (like `http_server.vera`) compile and pass SMT verification, ensuring we never break real-world programs.
+
+---
+
+## 6. Git Workflow
+
+This project follows a standard Git Flow model managed via GitHub:
+
+1. **Never commit directly to `main`**. The `main` branch is locked and protected.
+2. **Create a Feature Branch**: When starting a new task, branch off `main` with a descriptive name (e.g., `git checkout -b feature/lexer-logos` or `git checkout -b fix/borrow-checker-bug`).
+3. **Commit often**: Keep your commits logically grouped and utilize the Test-Driven Development approach as documented above.
+4. **Pull Requests (PRs)**: 
+   - Push your branch and open a PR against `main`.
+   - Ensure all tests pass via GitHub Actions CI (automatically triggered on PR creation).
+   - Fix any failing LLVM builds or `cargo clippy` warnings directly in the PR branch.
+   - Wait for at least one approving review before merging into `main`.
