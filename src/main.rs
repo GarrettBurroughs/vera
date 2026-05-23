@@ -31,14 +31,24 @@ fn main() -> miette::Result<()> {
     match &cli.command {
         Commands::Build { file, output } => {
             let input = std::fs::read_to_string(file).expect("Failed to read file");
-            let ast = parser::parse(&input).expect("Failed to parse vertical slice snippet");
+            let parser = parser::Parser::new(&input);
+            let (cst, errors) = parser.parse();
+            if !errors.is_empty() {
+                for err in errors { eprintln!("Parse Error: {}", err); }
+            }
+            let ast = parser::ast::extract_func_decl(&cst).expect("Failed to map CST to AST");
             
             let out_bin = output.clone().unwrap_or_else(|| "a.out".to_string());
             backend::compile_to_binary(&ast, &out_bin).expect("Failed to compile");
         }
         Commands::Run { file } => {
             let input = std::fs::read_to_string(file).expect("Failed to read file");
-            let ast = parser::parse(&input).expect("Failed to parse vertical slice snippet");
+            let parser = parser::Parser::new(&input);
+            let (cst, errors) = parser.parse();
+            if !errors.is_empty() {
+                for err in errors { eprintln!("Parse Error: {}", err); }
+            }
+            let ast = parser::ast::extract_func_decl(&cst).expect("Failed to map CST to AST");
             
             let out_bin = "./.tmp.vera.out";
             backend::compile_to_binary(&ast, out_bin).expect("Failed to compile");

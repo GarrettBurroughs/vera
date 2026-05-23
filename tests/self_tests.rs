@@ -18,6 +18,17 @@ mod tests {
             if path.extension().and_then(|s| s.to_str()) == Some("vera") {
                 let content = std::fs::read_to_string(&path).unwrap();
                 if content.contains("// run-pass") {
+                    let mut expected_code = 0;
+                    for line in content.lines() {
+                        if let Some(idx) = line.find("// expect-exit-code: ") {
+                            let num_str = &line[idx + 21..].trim();
+                            if let Ok(num) = num_str.parse::<i32>() {
+                                expected_code = num;
+                                break;
+                            }
+                        }
+                    }
+
                     let status = Command::new("cargo")
                         .arg("run")
                         .arg("--")
@@ -26,14 +37,12 @@ mod tests {
                         .status()
                         .unwrap();
                     
-                    if path.file_name().unwrap() == "002_exit_code.vera" {
-                        assert_eq!(status.code(), Some(42));
-                    } else if path.file_name().unwrap() == "001_basic_math.vera" {
-                        // The minimal compiler can't handle arithmetic yet.
-                        // We will skip this in the runner until Phase 2 is complete.
-                    } else {
-                        assert_eq!(status.code(), Some(0));
-                    }
+                    assert_eq!(
+                        status.code(), 
+                        Some(expected_code), 
+                        "Test {} failed. Expected exit code {}, but got {:?}", 
+                        path.display(), expected_code, status.code()
+                    );
                 }
             }
         }

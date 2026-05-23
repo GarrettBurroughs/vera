@@ -1,7 +1,7 @@
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::OptimizationLevel;
-use crate::parser::FuncDecl;
+use crate::parser::ast::FuncDecl;
 
 pub fn compile_to_binary(ast: &FuncDecl, output_path: &str) -> Result<(), String> {
     let context = Context::create();

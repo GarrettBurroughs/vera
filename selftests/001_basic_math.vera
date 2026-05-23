@@ -1,4 +1,4 @@
-// run-pass
+// skip-test
 // This is a basic self-test to verify arithmetic.
 
 pub func main(): i32 {
