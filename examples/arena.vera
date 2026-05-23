@@ -1,5 +1,9 @@
+enum AllocError {
+    OutOfMemory
+}
+
 pub struct Arena {
-    buffer: *mut u8,
+    buffer: mut ptr u8,
     capacity: u64,
     offset: u64,
 
@@ -11,7 +15,7 @@ pub struct Arena {
 
 impl Arena {
     /// Initializes an Arena using a pre-allocated raw memory buffer.
-    pub fn new(buf: *mut u8, cap: u64) -> Arena
+    pub func new(buf: mut ptr u8, cap: u64): Arena
     spec {
         requires buf != null ==> valid(buf..buf.add(cap));
         ensures result.buffer == buf;
@@ -27,35 +31,35 @@ impl Arena {
     }
 
     /// Allocates a block of memory with a specific size and power-of-two alignment constraint.
-    pub fn alloc(
-        self: &mut Arena, 
+    pub func alloc(
+        self: mut ref Arena, 
         size: u64, 
-        align: { a: u64 where a == 1 || a == 2 || a == 4 || a == 8 || a == 16 || a == 32 || a == 64 }
-    ) -> Option<*mut u8>
+        align: u64 where (self == 1 || self == 2 || self == 4 || self == 8 || self == 16 || self == 32 || self == 64)
+    ): Result[mut ptr u8, AllocError]
     spec {
         assigns self.offset;
         
         // Postcondition: returns a valid pointer aligned to the requested boundary, or None on OOM
         ensures match result {
-            Option::Some(ptr) => {
+            case Ok(ptr) => {
                 // SMT prover verifies that the returned ptr is within the buffer's bounds
                 valid(ptr..ptr.add(size)) &&
                 self.offset <= self.capacity &&
                 ptr as u64 % align == 0
             },
-            Option::None => self.offset == old(self.offset),
+            case Err(_) => self.offset == old(self.offset),
         };
     }
     {
         if self.buffer == null {
-            return Option::None;
+            return Err(AllocError.OutOfMemory);
         }
 
-        let raw_addr = self.buffer as u64 + self.offset;
+        const raw_addr = self.buffer as u64 + self.offset;
         
         // Compute alignment padding
-        let rem = raw_addr % align;
-        let padding = if rem == 0 {
+        const rem = raw_addr % align;
+        const padding = if rem == 0 {
             0
         } else {
             align - rem
@@ -63,24 +67,24 @@ impl Arena {
 
         // Prevent overflow checks during allocation math
         if self.offset + padding > self.capacity {
-            return Option::None;
+            return Err(AllocError.OutOfMemory);
         }
         
-        let alloc_offset = self.offset + padding;
+        const alloc_offset = self.offset + padding;
         if alloc_offset + size > self.capacity {
-            return Option::None;
+            return Err(AllocError.OutOfMemory);
         }
 
         // Pointer addition is verified safe because buffer..buffer.add(capacity) is valid
-        let ptr = unsafe { self.buffer.add(alloc_offset) };
+        const ptr = unsafe { self.buffer.add(alloc_offset) };
         
         self.offset = alloc_offset + size;
         
-        return Option::Some(ptr);
+        return Ok(ptr);
     }
 
     /// Resets the allocator bump pointer back to zero, reclaiming all memory.
-    pub fn reset(self: &mut Arena)
+    pub func reset(self: mut ref Arena)
     spec {
         assigns self.offset;
         ensures self.offset == 0;

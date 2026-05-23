@@ -9,7 +9,7 @@ Verification in Vera is a first-class language feature. The compiler parses cont
 Functions can be annotated with contracts that form the boundaries of the function's behavior.
 
 ```vera
-fn swap(a: *mut i32, b: *mut i32)
+func swap(a: mut ptr i32, b: mut ptr i32)
 spec {
     requires valid(a) && valid(b);
     requires separated(a, b);
@@ -18,12 +18,11 @@ spec {
 }
 {
     unsafe {
-        let temp = *a;
+        const temp = *a;
         *a = *b;
         *b = temp;
     }
 }
-
 ```
 
 ### Preconditions (`requires`)
@@ -50,7 +49,7 @@ spec {
 ### Struct Invariants
 In addition to function-level contracts, structs can define native invariants that must hold for all instances of the struct at public boundaries:
 * **Syntax**: Declared using the `invariant <expr>` clause directly inside the struct body.
-* **Verification Rule**: For any public or exported function taking `&Self`, `&mut Self`, or returning `Self`:
+* **Verification Rule**: For any public or exported function taking `ref Self`, `mut ref Self`, or returning `Self`:
   1. The struct invariant is automatically assumed as a **precondition** on entry.
   2. The struct invariant must be proved as a **postcondition** on exit (for return values or mutated parameters).
 * **Temporary Violations**: Private internal helper functions do not automatically enforce struct invariants, allowing the implementation to temporarily violate invariants during intermediate steps as long as the invariant is restored before returning to the caller.
@@ -73,19 +72,18 @@ Vera's contracts support a first-order logic language that extends standard bool
 
 * **Implication (`==>`)**: `A ==> B` is true if `A` implies `B`.
 * **Equivalence (`<==>`)**: `A <==> B` is true if `A` is equivalent to `B`.
-* **Universal Quantifier (`forall`)**: `forall(x: T) { P(x) }` or range-bounded `forall(x in range) { P(x) }`.
-* **Existential Quantifier (`exists`)**: `exists(x: T) { P(x) }` or range-bounded `exists(x in range) { P(x) }`.
-* **Choice Binder (`choose`)**: `choose(x: T) { P(x) }` or range-bounded `choose(x in range) { P(x) }` (evaluates to a unique value of type `T` that satisfies `P(x)`, assuming one exists).
+* **Universal Quantifier (`forall`)**: `forall(x: T) { P(x) }` or range-bounded `forall(x in start..end) { P(x) }`.
+* **Existential Quantifier (`exists`)**: `exists(x: T) { P(x) }` or range-bounded `exists(x in start..end) { P(x) }`.
+* **Choice Binder (`choose`)**: `choose(x: T) { P(x) }` or range-bounded `choose(x in start..end) { P(x) }` (evaluates to a unique value of type `T` that satisfies `P(x)`, assuming one exists).
 * **Integer Arithmetic**: Inside contracts, standard operators `+`, `-`, `*`, `/` represent mathematical operations on mathematical integers ($\mathbb{Z}$) rather than machine integers. This eliminates the need to worry about overflow in proofs, while the compiler verifies that the implementation does not overflow.
-
 
 Example of quantification:
 ```vera
-fn find_zero(arr: &[i32]) -> Option<u64>
+func find_zero(arr: slice[i32]): Option[u64]
 spec {
     ensures match result {
-        Option::Some(idx) => idx < arr.len() && arr[idx] == 0,
-        Option::None => forall(i in 0..arr.len()) { arr[i] != 0 },
+        case Some(idx) => idx < arr.len() && arr[idx] == 0,
+        case None => forall(i in 0..arr.len()) { arr[i] != 0 },
     };
 }
 ```
@@ -101,7 +99,7 @@ When interacting with C ABI code and raw pointers, Vera provides predicates to r
 * `separated(ptr1, ptr2)`: Evaluates to `true` if the memory block pointed to by `ptr1` and the block pointed to by `ptr2` are completely disjoint (i.e. no aliasing).
 
 ```vera
-fn copy_ints(dest: *mut i32, src: *const i32, count: u64)
+func copy_ints(dest: mut ptr i32, src: ptr i32, count: u64)
 spec {
     requires valid(dest..dest.add(count));
     requires valid_read(src..src.add(count));
@@ -117,7 +115,7 @@ spec {
 Loops must be verified to ensure they are correct and terminate. Vera uses three loop annotations:
 
 ```vera
-let mut i = 0;
+var i = 0;
 while i < len
 spec {
     invariant i <= len;
@@ -138,7 +136,7 @@ spec {
    - Immediately after the loop terminates.
 2. `assigns <lvalue-list>`: Declares which variables or memory locations are mutated inside the loop.
 3. `decreases <expr>`: A loop variant used to prove that the loop terminates. The expression must be a non-negative integer that decreases with every iteration.
-112: 
+
 
 ### Simplifying Loop Verification: Auto-Inference and Slice Framing
 
@@ -175,12 +173,12 @@ Here is a side-by-side look at a function that sets all elements of a slice to 0
 In traditional systems (such as Frama-C or raw SMT condition generators), the programmer is forced to specify every trivial fact:
 
 ```vera
-fn zero_out_verbose(arr: &mut [i32])
+func zero_out_verbose(arr: mut slice[i32])
 spec {
     ensures forall(k in 0..arr.len()) { arr[k] == 0 };
 }
 {
-    let mut i: u64 = 0;
+    var i: u64 = 0;
     while i < arr.len()
     spec {
         // Manually declaring range bounds
@@ -202,7 +200,7 @@ spec {
 By utilizing **Range Invariant Auto-Inference** and **Automatic Slice Framing**, the programmer only needs to write the core loop invariant (the actual work done by the loop):
 
 ```vera
-fn zero_out_vera(arr: &mut [i32])
+func zero_out_vera(arr: mut slice[i32])
 spec {
     ensures forall(k in 0..arr.len()) { arr[k] == 0 };
 }
@@ -228,7 +226,7 @@ Sometimes, verification requires tracking helper state that is not needed in the
 Ghost variables and parameters are used only for verification. The compiler guarantees that they are completely erased during the code-generation phase and have no impact on runtime performance or layout.
 
 ```vera
-fn compute_sum(arr: &[i32], ghost size: u64) -> i32
+func compute_sum(arr: slice[i32], ghost size: u64): i32
 spec {
     requires arr.len() == size;
 }
@@ -240,7 +238,7 @@ Logic functions are pure, mathematical functions. They cannot modify state, and 
 Therefore, the compiler enforces that **all recursive logic and ghost functions must provide a `decreases` clause** and prove termination:
 
 ```vera
-ghost fn mathematical_sum(n: u64) -> u64 
+ghost func mathematical_sum(n: u64): u64 
 spec {
     decreases n;
 }
@@ -254,7 +252,7 @@ spec {
 ```
 
 ### Pure Function Reflection
-In many verification tools, programmers must duplicate logic by writing a mathematical ghost function (e.g., `ghost fn logical_is_sorted`) and a matching executable function (e.g., `fn is_sorted`). 
+In many verification tools, programmers must duplicate logic by writing a mathematical ghost function (e.g., `ghost func logical_is_sorted`) and a matching executable function (e.g., `func is_sorted`). 
 
 To eliminate this overhead, Vera introduces **Pure Function Reflection**. Any runtime function marked with the `pure` keyword is automatically promoted by the type-checker into a logic predicate that can be used directly inside contracts, invariants, and assert statements.
 
@@ -268,7 +266,7 @@ To be marked `pure`, a function must satisfy the following strict compile-time c
 #### Example
 ```vera
 /// A pure executable function that checks if a slice is sorted.
-pure fn is_sorted(arr: &[i32]) -> bool {
+pure func is_sorted(arr: slice[i32]): bool {
     for i in 0..arr.len() - 1
     spec {
         // Program loop invariant
@@ -283,12 +281,12 @@ pure fn is_sorted(arr: &[i32]) -> bool {
 }
 
 /// is_sorted can now be used as a predicate in contracts!
-fn binary_search(arr: &[i32], target: i32) -> Option<u64>
+func binary_search(arr: slice[i32], target: i32): Option[u64]
 spec {
     requires is_sorted(arr);
     ensures match result {
-        Option::Some(idx) => arr[idx] == target,
-        Option::None => forall(i in 0..arr.len()) { arr[i] != target },
+        case Some(idx) => arr[idx] == target,
+        case None => forall(i in 0..arr.len()) { arr[i] != target },
     };
 }
 ```
@@ -312,9 +310,9 @@ To aid the SMT solver in complex proofs, Vera allows assertions and assumptions 
 * `check <expr>;`: Similar to `assert`, but does not add the fact to the solver context afterwards (used to verify intermediate goals without cluttering the proof environment).
 
 ```vera
-let x = get_sensor_value();
+const x = get_sensor_value();
 assume x >= 0; // External hardware constraint
-let y = x + 1;
+const y = x + 1;
 assert y > 0; // Proven by solver
 ```
 
@@ -334,7 +332,7 @@ To solve this, Vera performs automatic **Precondition Vacuity Checking** at comp
 // Example of a bug that triggers a Vacuous Precondition Error:
 const MAX_SAFE_INT: i32 = -1; // Type bug: should be (unsigned int)-1 >> 1
 
-fn process(x: i32)
+func process(x: i32)
 spec {
     requires x > 0 && x < MAX_SAFE_INT;
 }
@@ -349,24 +347,24 @@ spec {
 In traditional verification, calling a function `bar` inside `foo` forces `foo` to duplicate the preconditions and postconditions of `bar` in its own contracts to verify correctly.
 
 To prevent this duplication, the Vera compiler automatically generates two logic namespace predicates for every function `f(x: A) -> B`:
-1. `f::requires(x)`: Resolves to `f`'s preconditions.
-2. `f::ensures(x, result)`: Resolves to `f`'s postconditions.
+1. `f.requires(x)`: Resolves to `f`'s preconditions.
+2. `f.ensures(x, result)`: Resolves to `f`'s postconditions.
 
 These predicates can be reused in any contract, allowing contract inheritance and abstraction.
 
 ```vera
-fn sort(arr: &mut [i32])
+func sort(arr: mut slice[i32])
 spec {
     ensures is_sorted(arr);
     ensures permutation(arr, old(arr));
 }
 
 // Callers can inherit sort's contract automatically
-fn sort_and_process(arr: &mut [i32])
+func sort_and_process(arr: mut slice[i32])
 spec {
-    requires sort::requires(arr);
+    requires sort.requires(arr);
     assigns arr[..];
-    ensures sort::ensures(old(arr), arr);
+    ensures sort.ensures(old(arr), arr);
 }
 {
     sort(arr);
@@ -383,15 +381,15 @@ Branching functions (like comparisons or parsers) often require verbose, repetit
 You can use `match` directly in postconditions to align the contract structure with the implementation's logical branches:
 
 ```vera
-fn semver_compare(x: semver_t, y: semver_t) -> i32
+func semver_compare(x: semver_t, y: semver_t): i32
 spec {
     ensures match (x.major.compare(y.major)) {
-        Ordering::Greater => result == 1,
-        Ordering::Less => result == -1,
-        Ordering::Equal => match (x.minor.compare(y.minor)) {
-            Ordering::Greater => result == 1,
-            Ordering::Less => result == -1,
-            Ordering::Equal => result == x.patch.compare(y.patch),
+        case Ordering.Greater => result == 1,
+        case Ordering.Less => result == -1,
+        case Ordering.Equal => match (x.minor.compare(y.minor)) {
+            case Ordering.Greater => result == 1,
+            case Ordering.Less => result == -1,
+            case Ordering.Equal => result == x.patch.compare(y.patch),
         }
     };
 }
@@ -401,7 +399,7 @@ spec {
 Alternatively, behaviors can be nested hierarchically. A nested behavior inherits the assumptions of its parent, eliminating the need to repeat common predicates.
 
 ```vera
-fn semver_compare(x: semver_t, y: semver_t) -> i32
+func semver_compare(x: semver_t, y: semver_t): i32
 spec {
     behavior major_gt:
         assumes x.major > y.major
@@ -419,15 +417,13 @@ spec {
 
 ---
 
-## 10. Standard Specification Library (`std::spec`)
+## 10. Standard Specification Library (`std.spec`)
 
-To provide developers with a robust toolbox for writing specifications, Vera compiles with `std::spec`, a standard library of mathematical predicates and logic helpers:
+To provide developers with a robust toolbox for writing specifications, Vera compiles with `std.spec`, a standard library of mathematical predicates and logic helpers:
 
-* `std::spec::is_sorted(slice: &[T]) -> bool`: Evaluates to `true` if the slice elements are sorted in non-decreasing order.
-* `std::spec::permutation(a: &[T], b: &[T]) -> bool`: Evaluates to `true` if `a` is a mathematical permutation of `b`.
-* `std::spec::all_distinct(slice: &[T]) -> bool`: Evaluates to `true` if no two elements in the slice are equal.
-* `std::spec::contains(slice: &[T], val: T) -> bool`: Evaluates to `true` if `val` is present in `slice`.
+* `std.spec.is_sorted[T](slice: slice[T]): bool`: Evaluates to `true` if the slice elements are sorted in non-decreasing order.
+* `std.spec.permutation[T](a: slice[T], b: slice[T]): bool`: Evaluates to `true` if `a` is a mathematical permutation of `b`.
+* `std.spec.all_distinct[T](slice: slice[T]): bool`: Evaluates to `true` if no two elements in the slice are equal.
+* `std.spec.contains[T](slice: slice[T], val: T): bool`: Evaluates to `true` if `val` is present in `slice`.
 
-By using `std::spec`, developers can write concise, high-level contracts (e.g. `ensures std::spec::permutation(arr, old(arr))`) without having to manually define complex inductive or recursive predicates.
-
-```
+By using `std.spec`, developers can write concise, high-level contracts (e.g. `ensures std.spec.permutation(arr, old(arr))`) without having to manually define complex inductive or recursive predicates.

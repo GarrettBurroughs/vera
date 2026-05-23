@@ -1,14 +1,14 @@
 // Stubbed C library declarations for file and standard I/O.
 extern "C" {
-    fn fopen(path: *const u8, mode: *const u8) -> *mut u8;
-    fn fgets(buf: *mut u8, n: i32, stream: *mut u8) -> *mut u8;
-    fn fclose(stream: *mut u8) -> i32;
-    fn printf(format: *const u8, arg: *const u8);
+    func fopen(path: ptr u8, mode: ptr u8): mut ptr u8;
+    func fgets(buf: mut ptr u8, n: i32, stream: mut ptr u8): mut ptr u8;
+    func fclose(stream: mut ptr u8): i32;
+    func printf(format: ptr u8, arg: ptr u8);
 }
 
 /// Helper pure function checking if the pattern matches the text at a specific offset.
 /// Automatically promoted to a verification predicate via Pure Function Reflection.
-pure fn is_match_at(text: &[u8], pattern: &[u8], offset: u64) -> bool
+pure func is_match_at(text: slice[u8], pattern: slice[u8], offset: u64): bool
 spec {
     requires offset + pattern.len() <= text.len();
 }
@@ -27,7 +27,7 @@ spec {
 }
 
 /// Pure substring matcher. Automatically promoted to a logic predicate.
-pub pure fn contains_substring(text: &[u8], pattern: &[u8]) -> bool
+pub pure func contains_substring(text: slice[u8], pattern: slice[u8]): bool
 spec {
     ensures result == true ==> exists(offset in 0..=text.len() - pattern.len()) { is_match_at(text, pattern, offset) };
     ensures result == false ==> forall(offset in 0..=text.len() - pattern.len()) { !is_match_at(text, pattern, offset) };
@@ -41,7 +41,7 @@ spec {
     }
 
     // Iterate through all possible offsets in the text
-    let limit = text.len() - pattern.len();
+    const limit = text.len() - pattern.len();
     for offset in 0..=limit
     spec {
         // Invariant: no match was found at any offset less than the current offset
@@ -57,21 +57,21 @@ spec {
 }
 
 /// Simple CLI search execution. Stubs file system reads, ensuring buffer boundaries.
-pub fn grep_stream(stream: *mut u8, pattern: &[u8])
+pub func grep_stream(stream: mut ptr u8, pattern: slice[u8])
 spec {
     requires stream != null;
 }
 {
-    let mut buffer: [u8; 1024] = [0; 1024];
+    var buffer: array[u8, 1024] = [0; 1024];
     
     while true {
-        let res = unsafe { fgets(&mut buffer[0], 1024, stream) };
+        const res = unsafe { fgets(mut ptr buffer[0], 1024, stream) };
         if res == null {
             break; // End of file or error
         }
 
         // We determine how many bytes were read by locating the newline or null-terminator.
-        let mut len: u64 = 0;
+        var len: u64 = 0;
         while len < 1023 && buffer[len] != 0 && buffer[len] != 10 // ASCII 10 = '\n'
         spec {
             invariant len <= 1023;
@@ -81,10 +81,10 @@ spec {
         }
 
         // Slice the buffer safely using range checks proved by refinement.
-        let line = &buffer[0..len];
+        const line = buffer[0..len];
         if contains_substring(line, pattern) {
             unsafe {
-                printf(b"%s\n\0".as_ptr(), &buffer[0]);
+                printf("%s\n\0", ptr buffer[0]);
             }
         }
     }

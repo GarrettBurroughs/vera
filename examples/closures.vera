@@ -1,0 +1,24 @@
+/// Demonstrates Vera's C-ABI compatible closure design.
+/// Closures in Vera are compiled down to a pair of pointers: a standard C function pointer
+/// and an opaque environment pointer. This allows them to capture state while remaining
+/// perfectly compatible with C callbacks.
+
+pub func map_in_place(arr: mut slice[i32], f: func(i32): i32) {
+    for i in 0..arr.len() {
+        arr[i] = f(arr[i]);
+    }
+}
+
+pub func demo_closures() {
+    var data: array[i32, 5] = [1, 2, 3, 4, 5];
+    const multiplier = 10;
+    const offset = 5;
+    
+    // The closure captures the `multiplier` and `offset` variables from the environment.
+    // The compiler automatically generates:
+    // 1. A C struct to hold the captured environment `{ i32 multiplier; i32 offset; }`
+    // 2. A C-compatible trampoline function: `int32_t closure_trampoline(void* env, int32_t x)`
+    map_in_place(data[0..5], |x| (x * multiplier) + offset);
+    
+    // data is now [15, 25, 35, 45, 55]
+}

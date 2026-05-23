@@ -1,28 +1,28 @@
 /// Ghost predicate defining if a raw pointer is a valid null-terminated C string.
-ghost fn is_null_terminated(ptr: *const u8) -> bool {
-    exists(len: u64) { valid_read(ptr..ptr.add(len + 1)) && *ptr.add(len) == 0 }
+ghost func is_null_terminated(ptr: ptr u8): bool {
+    return exists(len: u64) { valid_read(ptr..ptr.add(len + 1)) && *ptr.add(len) == 0 };
 }
 
 /// Ghost logic function to determine the length of a null-terminated C string.
-ghost fn strlen_logic(ptr: *const u8) -> u64
+ghost func strlen_logic(ptr: ptr u8): u64
 spec {
     requires is_null_terminated(ptr);
 }
 {
     // Evaluates to the index of the first null-terminator.
     // 'choose' evaluates to the unique value satisfying the condition.
-    choose(len: u64) { *ptr.add(len) == 0 && forall(i in 0..len) { *ptr.add(i) != 0 } }
+    return choose(len: u64) { *ptr.add(len) == 0 && forall(i in 0..len) { *ptr.add(i) != 0 } };
 }
 
 /// Safely copies a null-terminated string from `src` to `dest`.
 /// Conforms to the C ABI and can be linked as `strcpy`.
-#[no_mangle]
-pub unsafe extern "C" fn vera_strcpy(dest: *mut u8, src: *const u8) -> *mut u8
+@export
+pub unsafe func vera_strcpy(dest: mut ptr u8, src: ptr u8): mut ptr u8
 spec {
     requires is_null_terminated(src);
     
     // We let-bind the length in the contract context for readability.
-    let len = strlen_logic(src);
+    const len = strlen_logic(src);
     
     // Preconditions: dest buffer must have enough space, and src and dest must not overlap.
     requires valid(dest..dest.add(len + 1));
@@ -38,8 +38,8 @@ spec {
     ensures result == dest;
 }
 {
-    let mut i: u64 = 0;
-    let len = strlen_logic(src);
+    var i: u64 = 0;
+    const len = strlen_logic(src);
     
     while true
     spec {
@@ -54,7 +54,7 @@ spec {
     {
         // Dereferencing raw pointers requires an unsafe block.
         unsafe {
-            let val = *src.add(i);
+            const val = *src.add(i);
             *dest.add(i) = val;
             if val == 0 {
                 break;

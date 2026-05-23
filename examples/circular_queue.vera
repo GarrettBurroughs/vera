@@ -1,5 +1,5 @@
 struct CircularQueue {
-    data: [i32; 8],
+    data: array[i32, 8],
     head: u64,
     tail: u64,
     count: u64,
@@ -13,7 +13,7 @@ struct CircularQueue {
 
 impl CircularQueue {
     /// Creates a new, empty circular queue.
-    pub fn new() -> CircularQueue
+    pub func new(): CircularQueue
     spec {
         ensures result.count == 0;
         ensures result.head == 0;
@@ -29,7 +29,7 @@ impl CircularQueue {
     }
 
     /// Checks if the queue is empty.
-    pub fn is_empty(self: &CircularQueue) -> bool
+    pub func is_empty(self: ref CircularQueue): bool
     spec {
         ensures result == (self.count == 0);
     }
@@ -38,7 +38,7 @@ impl CircularQueue {
     }
 
     /// Checks if the queue is full.
-    pub fn is_full(self: &CircularQueue) -> bool
+    pub func is_full(self: ref CircularQueue): bool
     spec {
         ensures result == (self.count == 8);
     }
@@ -47,7 +47,7 @@ impl CircularQueue {
     }
 
     /// Adds an element to the queue. Returns true if successful.
-    pub fn enqueue(self: &mut CircularQueue, val: i32) -> bool
+    pub func enqueue(self: mut ref CircularQueue, val: i32): bool
     spec {
         assigns self.tail, self.count, self.data[self.tail];
         ensures old(self.count) < 8 ==> result == true && self.count == old(self.count) + 1;
@@ -67,24 +67,24 @@ impl CircularQueue {
     }
 
     /// Removes and returns an element from the queue.
-    pub fn dequeue(self: &mut CircularQueue) -> Option<i32>
+    pub func dequeue(self: mut ref CircularQueue): Option[i32]
     spec {
         assigns self.head, self.count;
         ensures old(self.count) > 0 ==> match result {
-            Option::Some(val) => self.count == old(self.count) - 1 && val == old(self.data[self.head]),
-            Option::None => false, // Verification engine proves this branch is dead
+            case Some(val) => self.count == old(self.count) - 1 && val == old(self.data[self.head]),
+            case None => false, // Verification engine proves this branch is dead
         };
-        ensures old(self.count) == 0 ==> result == Option::None && self.count == 0;
+        ensures old(self.count) == 0 ==> result == Option.None && self.count == 0;
     }
     {
         if self.count == 0 {
-            return Option::None;
+            return Option.None;
         }
         
         // SMT prover uses the struct invariant 'head < 8' to verify bounds safety here.
-        let val = self.data[self.head];
+        const val = self.data[self.head];
         self.head = (self.head + 1) % 8;
         self.count = self.count - 1;
-        return Option::Some(val);
+        return Option.Some(val);
     }
 }

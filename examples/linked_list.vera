@@ -1,60 +1,60 @@
 struct Node {
     value: i32,
-    next: Option<Box<Node>>,
+    next: Option[Box[Node]],
 }
 
 /// Ghost logic function calculating the mathematical length of a node chain.
-ghost fn list_len_logic(node: &Option<Box<Node>>) -> u64
+ghost func list_len_logic(node: ref Option[Box[Node]]): u64
 spec {
     decreases node;
 }
 {
     match node {
-        Option::Some(n) => 1 + list_len_logic(&n.next),
-        Option::None => 0,
+        case Some(n) => 1 + list_len_logic(ref n.next),
+        case None => 0,
     }
 }
 
 pub struct LinkedList {
-    head: Option<Box<Node>>,
+    head: Option[Box[Node]],
     len: u64,
 
     // Struct invariant: the cached length 'len' always matches the list size.
-    invariant len == list_len_logic(&head);
+    invariant len == list_len_logic(ref head);
 }
 
 impl LinkedList {
     /// Creates a new empty LinkedList.
-    pub fn new() -> LinkedList
+    pub func new(): LinkedList
     spec {
         ensures result.len == 0;
     }
     {
         return LinkedList {
-            head: Option::None,
+            head: Option.None,
             len: 0,
         };
     }
 
     /// Inserts an item at the front of the list.
-    pub fn push_front(self: &mut LinkedList, val: i32)
+    pub func push_front(self: mut ref LinkedList, val: i32)
     spec {
         assigns self.head, self.len;
         ensures self.len == old(self.len) + 1;
     }
     {
-        let new_node = Box::new(Node {
+        const new_node = Box.new(Node {
             value: val,
-            // Option::take replaces self.head with Option::None and returns the old value
+            // Option.take replaces self.head with Option.None and returns the old value
             next: self.head.take(),
         });
         
-        self.head = Option::Some(new_node);
+        self.head = Option.Some(new_node);
         self.len = self.len + 1;
     }
 
     /// Removes and returns the item from the front of the list.
-    pub fn pop_front(self: &mut LinkedList) -> Option<i32>
+    pub func pop_front(self: mut ref LinkedList): Option[i32]
     spec {
         assigns self.head, self.len;
         ensures old(self.len) > 0 ==> self.len == old(self.len) - 1 && result.is_some();
@@ -62,26 +62,26 @@ impl LinkedList {
     }
     {
         match self.head.take() {
-            Option::Some(node) => {
+            case Some(node) => {
                 // Relink the list
                 self.head = node.next;
                 self.len = self.len - 1;
-                return Option::Some(node.value);
+                return Option.Some(node.value);
             }
-            Option::None => {
-                return Option::None;
+            case None => {
+                return Option.None;
             }
         }
     }
 
     /// Clears the list, releasing all allocated nodes.
-    pub fn clear(self: &mut LinkedList)
+    pub func clear(self: mut ref LinkedList)
     spec {
         assigns self.head, self.len;
         ensures self.len == 0;
     }
     {
-        self.head = Option::None;
+        self.head = Option.None;
         self.len = 0;
     }
 }

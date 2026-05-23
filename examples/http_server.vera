@@ -1,18 +1,23 @@
-struct HttpRequest<'a> {
-    method: &'a [u8],
-    path: &'a [u8],
-    version: &'a [u8],
+enum ParseError {
+    NotFound,
+    InvalidFormat
+}
+
+struct HttpRequest {
+    method: slice[u8],
+    path: slice[u8],
+    version: slice[u8],
 }
 
 /// Helper pure function to locate a specific byte in a slice starting from an offset.
 /// Automatically promoted to a logic predicate.
-pure fn find_char(slice: &[u8], target: u8, start: u64) -> Option<u64>
+pure func find_char(slice: slice[u8], target: u8, start: u64): Result[u64, ParseError]
 spec {
     requires start <= slice.len();
     ensures match result {
-        Option::Some(idx) => idx >= start && idx < slice.len() && slice[idx] == target &&
+        case Ok(idx) => idx >= start && idx < slice.len() && slice[idx] == target &&
                              forall(j in start..idx) { slice[j] != target },
-        Option::None => forall(j in start..slice.len()) { slice[j] != target },
+        case Err(_) => forall(j in start..slice.len()) { slice[j] != target },
     };
 }
 {
@@ -22,85 +27,76 @@ spec {
     }
     {
         if slice[i] == target {
-            return Option::Some(i);
+            return Ok(i);
         }
     }
-    return Option::None;
+    return Err(ParseError.NotFound);
 }
 
 /// Safely parses an HTTP request line (e.g. "GET /index.html HTTP/1.1\r\n").
 /// SMT solver automatically proves that all slice operations are bounds-safe.
-pub fn parse_request<'a>(raw: &'a [u8]) -> Option<HttpRequest<'a>>
+pub func parse_request(raw: slice[u8]): Result[HttpRequest, ParseError]
 spec {
     ensures match result {
-        Option::Some(req) => req.method.len() + req.path.len() + req.version.len() + 3 <= raw.len(),
-        Option::None => true,
+        case Ok(req) => req.method.len() + req.path.len() + req.version.len() + 3 <= raw.len(),
+        case Err(_) => true,
     };
 }
 {
     // Find the first space ' ' (ASCII 32)
-    let space1 = match find_char(raw, 32, 0) {
-        Option::Some(idx) => idx,
-        Option::None => return Option::None,
-    };
+    const space1 = find_char(raw, 32, 0)?;
 
     // Find the second space ' ' starting after the first space
-    let space2 = match find_char(raw, 32, space1 + 1) {
-        Option::Some(idx) => idx,
-        Option::None => return Option::None,
-    };
+    const space2 = find_char(raw, 32, space1 + 1)?;
 
     // Find the carriage return '\r' (ASCII 13) starting after the second space
-    let cr = match find_char(raw, 13, space2 + 1) {
-        Option::Some(idx) => idx,
-        Option::None => return Option::None,
-    };
+    const cr = find_char(raw, 13, space2 + 1)?;
 
     // Verify we have a matching line feed '\n' (ASCII 10) directly after '\r'
     if cr + 1 < raw.len() && raw[cr + 1] == 10 {
         // Zero-copy slicing. Prover guarantees no out of bounds read.
-        let method = &raw[0..space1];
-        let path = &raw[space1 + 1..space2];
-        let version = &raw[space2 + 1..cr];
+        const method = raw[0..space1];
+        const path = raw[space1 + 1..space2];
+        const version = raw[space2 + 1..cr];
 
-        return Option::Some(HttpRequest { method, path, version });
+        return Ok(HttpRequest { method, path, version });
     }
 
-    return Option::None;
+    return Err(ParseError.InvalidFormat);
 }
 
 // Stub declarations for C networking functions.
 extern "C" {
-    fn accept_connection() -> *mut u8;
-    fn recv_data(socket: *mut u8, buf: *mut u8, max_len: u64) -> i64;
-    fn send_data(socket: *mut u8, buf: *const u8, len: u64) -> i64;
-    fn close_connection(socket: *mut u8);
+    func accept_connection(): mut ptr u8;
+    func recv_data(socket: mut ptr u8, buf: mut ptr u8, max_len: u64): i64;
+    func send_data(socket: mut ptr u8, buf: ptr u8, len: u64): i64;
+    func close_connection(socket: mut ptr u8);
 }
 
-pub fn handle_client(socket: *mut u8)
+pub func handle_client(socket: mut ptr u8)
 spec {
     requires socket != null;
 }
 {
-    let mut buffer: [u8; 2048] = [0; 2048];
-    let bytes_received = unsafe { recv_data(socket, &mut buffer[0], 2048) };
+    var buffer: array[u8, 2048] = [0; 2048];
+    const bytes_received = unsafe { recv_data(socket, mut ptr buffer[0], 2048) };
     
     if bytes_received > 0 {
-        let request_slice = &buffer[0..bytes_received as u64];
+        const request_slice = buffer[0..bytes_received as u64];
         
         match parse_request(request_slice) {
-            Option::Some(req) => {
-                if req.path == b"/health" {
-                    let body = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
-                    unsafe { send_data(socket, &body[0], body.len()); }
+            case Ok(req) => {
+                if req.path == "/health" {
+                    const body = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                    unsafe { send_data(socket, ptr body[0], body.len()); }
                 } else {
-                    let body = b"HTTP/1.1 404 NOT FOUND\r\nContent-Length: 0\r\n\r\n";
-                    unsafe { send_data(socket, &body[0], body.len()); }
+                    const body = "HTTP/1.1 404 NOT FOUND\r\nContent-Length: 0\r\n\r\n";
+                    unsafe { send_data(socket, ptr body[0], body.len()); }
                 }
             }
-            Option::None => {
-                let body = b"HTTP/1.1 400 BAD REQUEST\r\nContent-Length: 0\r\n\r\n";
-                unsafe { send_data(socket, &body[0], body.len()); }
+            case Err(_) => {
+                const body = "HTTP/1.1 400 BAD REQUEST\r\nContent-Length: 0\r\n\r\n";
+                unsafe { send_data(socket, ptr body[0], body.len()); }
             }
         }
     }
