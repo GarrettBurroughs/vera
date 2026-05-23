@@ -15,6 +15,9 @@ pub struct Parser<'a> {
     cursor: usize,
     events: Vec<Event>,
 }
+    
+pub struct Marker(usize);
+pub struct CompletedMarker(usize);
 
 impl<'a> Parser<'a> {
     /// Initializes the parser by lexing the entire input upfront.
@@ -60,6 +63,20 @@ impl<'a> Parser<'a> {
     }
     
     // -- Parser Primitives --
+    
+    fn start(&mut self) -> Marker {
+        Marker(self.events.len())
+    }
+    
+    fn complete(&mut self, marker: Marker, kind: SyntaxKind) -> CompletedMarker {
+        self.events.insert(marker.0, Event::StartNode(kind));
+        self.events.push(Event::FinishNode);
+        CompletedMarker(marker.0)
+    }
+    
+    fn precede(&mut self, completed: CompletedMarker) -> Marker {
+        Marker(completed.0)
+    }
     
     fn at(&mut self, kind: SyntaxKind) -> bool {
         self.eat_trivia();
@@ -148,28 +165,200 @@ impl<'a> Parser<'a> {
         self.expect(SyntaxKind::LBrace);
         
         while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
-            if self.at(SyntaxKind::KwReturn) {
-                self.parse_return_stmt();
-            } else {
-                self.error("Expected statement");
-                self.advance();
-            }
+            self.parse_stmt();
         }
         
         self.expect(SyntaxKind::RBrace);
         self.finish_node();
     }
     
+    fn parse_stmt(&mut self) {
+        if self.at(SyntaxKind::KwReturn) {
+            self.parse_return_stmt();
+        } else if self.at(SyntaxKind::KwConst) || self.at(SyntaxKind::KwVar) {
+            self.parse_let_stmt();
+        } else if self.at(SyntaxKind::KwIf) {
+            self.parse_if_expr();
+        } else {
+            self.parse_expr_stmt();
+        }
+    }
+    
+    fn parse_let_stmt(&mut self) {
+        self.start_node(SyntaxKind::LET_STMT);
+        if self.at(SyntaxKind::KwConst) {
+            self.expect(SyntaxKind::KwConst);
+        } else {
+            self.expect(SyntaxKind::KwVar);
+        }
+        self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::Colon) {
+            self.advance();
+            self.parse_type();
+        }
+        
+        self.expect(SyntaxKind::Eq);
+        self.parse_expr();
+        self.expect(SyntaxKind::Semi);
+        self.finish_node();
+    }
+    
+    fn parse_expr_stmt(&mut self) {
+        self.start_node(SyntaxKind::EXPR_STMT);
+        self.parse_expr();
+        if self.at(SyntaxKind::Semi) {
+            self.advance();
+        } else {
+            self.error("Expected semicolon");
+        }
+        self.finish_node();
+    }
+    
     fn parse_return_stmt(&mut self) {
         self.start_node(SyntaxKind::RETURN_STMT);
         self.expect(SyntaxKind::KwReturn);
-        if self.at(SyntaxKind::IntLit) || self.at(SyntaxKind::BoolTrue) || self.at(SyntaxKind::BoolFalse) {
-            self.advance();
-        } else {
-            self.error("Expected expression");
+        
+        if !self.at(SyntaxKind::Semi) {
+            self.parse_expr();
         }
+        
         self.expect(SyntaxKind::Semi);
         self.finish_node();
+    }
+    
+    fn parse_if_expr(&mut self) {
+        self.start_node(SyntaxKind::IF_EXPR);
+        self.expect(SyntaxKind::KwIf);
+        
+        self.start_node(SyntaxKind::CONDITION);
+        self.parse_expr();
+        self.finish_node();
+        
+        if self.at(SyntaxKind::LBrace) {
+            self.parse_block();
+        } else {
+            self.error("Expected block");
+        }
+        
+        if self.at(SyntaxKind::KwElse) {
+            self.advance();
+            if self.at(SyntaxKind::KwIf) {
+                self.parse_if_expr();
+            } else if self.at(SyntaxKind::LBrace) {
+                self.parse_block();
+            } else {
+                self.error("Expected block or if");
+            }
+        }
+        
+        self.finish_node();
+    }
+    
+    fn parse_expr(&mut self) {
+        self.parse_assignment_expr();
+    }
+    
+    fn parse_assignment_expr(&mut self) {
+        let m = self.start();
+        self.parse_logic_expr();
+        if self.at(SyntaxKind::Eq) {
+            self.advance();
+            self.parse_assignment_expr();
+            self.complete(m, SyntaxKind::BIN_EXPR);
+        }
+    }
+    
+    fn parse_logic_expr(&mut self) {
+        let mut m = self.start();
+        self.parse_equality_expr();
+        while self.at(SyntaxKind::AmpAmp) || self.at(SyntaxKind::PipePipe) || self.at(SyntaxKind::Implies) || self.at(SyntaxKind::Iff) {
+            self.advance();
+            self.parse_equality_expr();
+            let comp = self.complete(m, SyntaxKind::BIN_EXPR);
+            m = self.precede(comp);
+        }
+    }
+    
+    fn parse_equality_expr(&mut self) {
+        let mut m = self.start();
+        self.parse_rel_expr();
+        while self.at(SyntaxKind::EqEq) || self.at(SyntaxKind::BangEq) {
+            self.advance();
+            self.parse_rel_expr();
+            let comp = self.complete(m, SyntaxKind::BIN_EXPR);
+            m = self.precede(comp);
+        }
+    }
+    
+    fn parse_rel_expr(&mut self) {
+        let mut m = self.start();
+        self.parse_add_expr();
+        while self.at(SyntaxKind::Less) || self.at(SyntaxKind::Greater) || self.at(SyntaxKind::LessEq) || self.at(SyntaxKind::GreaterEq) {
+            self.advance();
+            self.parse_add_expr();
+            let comp = self.complete(m, SyntaxKind::BIN_EXPR);
+            m = self.precede(comp);
+        }
+    }
+    
+    fn parse_add_expr(&mut self) {
+        let mut m = self.start();
+        self.parse_mul_expr();
+        while self.at(SyntaxKind::Plus) || self.at(SyntaxKind::Minus) {
+            self.advance();
+            self.parse_mul_expr();
+            let comp = self.complete(m, SyntaxKind::BIN_EXPR);
+            m = self.precede(comp);
+        }
+    }
+    
+    fn parse_mul_expr(&mut self) {
+        let mut m = self.start();
+        self.parse_unary_expr();
+        while self.at(SyntaxKind::Star) || self.at(SyntaxKind::Slash) || self.at(SyntaxKind::Percent) {
+            self.advance();
+            self.parse_unary_expr();
+            let comp = self.complete(m, SyntaxKind::BIN_EXPR);
+            m = self.precede(comp);
+        }
+    }
+    
+    fn parse_unary_expr(&mut self) {
+        if self.at(SyntaxKind::Bang) || self.at(SyntaxKind::Minus) || self.at(SyntaxKind::Star) || self.at(SyntaxKind::Amp) {
+            self.start_node(SyntaxKind::PREFIX_EXPR);
+            self.advance();
+            self.parse_postfix_expr();
+            self.finish_node();
+        } else {
+            self.parse_postfix_expr();
+        }
+    }
+    
+    fn parse_postfix_expr(&mut self) {
+        // Simplified for Phase 3.5: No method calls or array indexing yet
+        self.parse_primary_expr();
+    }
+    
+    fn parse_primary_expr(&mut self) {
+        if self.at(SyntaxKind::Ident) {
+            self.start_node(SyntaxKind::NAME_REF);
+            self.advance();
+            self.finish_node();
+        } else if self.at(SyntaxKind::IntLit) || self.at(SyntaxKind::FloatLit) || self.at(SyntaxKind::StringLit) || self.at(SyntaxKind::BoolTrue) || self.at(SyntaxKind::BoolFalse) {
+            self.start_node(SyntaxKind::LITERAL);
+            self.advance(); // Tokens are automatically attached as children
+            self.finish_node();
+        } else if self.at(SyntaxKind::LParen) {
+            self.advance();
+            self.parse_expr();
+            self.expect(SyntaxKind::RParen);
+        } else if self.at(SyntaxKind::KwIf) {
+            self.parse_if_expr();
+        } else {
+            self.error("Expected expression");
+            self.advance(); // Prevent infinite loop
+        }
     }
 }
 

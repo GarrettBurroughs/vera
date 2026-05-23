@@ -33,6 +33,14 @@ pub enum SyntaxKind {
     TYPE_REF,
     BLOCK_EXPR,
     RETURN_STMT,
+    LET_STMT,
+    EXPR_STMT,
+    BIN_EXPR,
+    PREFIX_EXPR,
+    IF_EXPR,
+    CONDITION,
+    NAME_REF,
+    LITERAL,
     ERROR_NODE,
 }
 
