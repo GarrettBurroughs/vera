@@ -540,6 +540,11 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ast::{AstNode, SourceFile};
+
+    fn parse(input: &str) -> (SyntaxNode, Vec<String>) {
+        Parser::new(input).parse()
+    }
 
     #[test]
     fn test_parse_func() {
@@ -549,7 +554,7 @@ mod tests {
         assert!(errors.is_empty());
         assert_eq!(cst.kind(), SyntaxKind::SOURCE_FILE);
     }
-    
+
     #[test]
     fn test_parse_error_recovery() {
         // Missing closing brace
@@ -584,5 +589,128 @@ mod tests {
         let parser = Parser::new(input);
         let (_, errors) = parser.parse();
         assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    }
+
+    /// Tests that `const` and `var` let-statements are parsed without errors.
+    #[test]
+    fn test_parse_let_statements() {
+        let (_, errors) = parse("func f(): i32 { const x: i32 = 1; var y: i32 = 2; return x; }");
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that type-annotated and type-inferred let-statements are both accepted.
+    #[test]
+    fn test_parse_let_without_type_annotation() {
+        // The parser accepts `const x = 1;` (type inferred by lowering later).
+        let (_, errors) = parse("func f(): i32 { const x = 1; return x; }");
+        // Parser does not enforce type annotations — lowering does.
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that binary expressions obey correct precedence:
+    /// `1 + 2 * 3` should parse as `1 + (2 * 3)`, not `(1 + 2) * 3`.
+    #[test]
+    fn test_parse_expr_precedence() {
+        let input = "func f(): i32 { return 1 + 2 * 3; }";
+        let (cst, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+
+        // Inspect the shape of the returned expression: the outermost binary
+        // op should be `+`, whose RHS should be a `BIN_EXPR` (the `*`).
+        let src = SourceFile::cast(cst).unwrap();
+        let func = src.functions().next().unwrap();
+        let body = func.body().unwrap();
+        let ret = body.statements().next().unwrap();
+        if let crate::parser::ast::Stmt::ReturnStmt(ret_stmt) = ret {
+            if let Some(crate::parser::ast::Expr::BinExpr(bin)) = ret_stmt.expr() {
+                // The operator should be `+` (Add), not `*`
+                let op = bin.op().expect("BinExpr must have operator");
+                assert_eq!(op.kind(), SyntaxKind::Plus, "outer op must be +");
+                // The RHS should itself be a BIN_EXPR (the * node)
+                let rhs = bin.rhs().expect("BinExpr must have rhs");
+                assert!(
+                    matches!(rhs, crate::parser::ast::Expr::BinExpr(_)),
+                    "RHS of + must be a BinExpr (* node), got {:?}", rhs
+                );
+            } else {
+                panic!("Expected BinExpr return");
+            }
+        } else {
+            panic!("Expected ReturnStmt");
+        }
+    }
+
+    /// Tests that a struct declaration is parsed without errors.
+    #[test]
+    fn test_parse_struct_decl() {
+        let input = "struct Point { x: i32, y: i32 }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that struct instantiation expressions are parsed without errors.
+    #[test]
+    fn test_parse_struct_expr() {
+        let input = "func f(): i32 { const p = Point { x: 1, y: 2 }; return 0; }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that if/else and else-if chains are parsed without errors.
+    #[test]
+    fn test_parse_if_else_chain() {
+        let input = r#"
+            func f(x: i32): i32 {
+                if x > 10 {
+                    return 1;
+                } else if x > 5 {
+                    return 2;
+                } else {
+                    return 3;
+                }
+            }
+        "#;
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that a void return (no expression) is parsed correctly.
+    #[test]
+    fn test_parse_return_no_value() {
+        let input = "func f() { return; }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that function calls with arguments are parsed correctly.
+    #[test]
+    fn test_parse_function_call() {
+        let input = "func f(): i32 { return add(1, 2); }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that field access expressions (`a.b`) are parsed correctly.
+    #[test]
+    fn test_parse_field_access() {
+        let input = "func f(): i32 { return p.x; }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that a function with no parameters and no return type is valid.
+    #[test]
+    fn test_parse_void_func() {
+        let input = "func noop() { }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+    }
+
+    /// Tests that missing semicolons are caught as parse errors.
+    #[test]
+    fn test_parse_missing_semicolon() {
+        let input = "func f(): i32 { return 42 }"; // missing semicolon after 42
+        let (_, errors) = parse(input);
+        assert!(!errors.is_empty(), "Expected a parse error for missing semicolon");
     }
 }

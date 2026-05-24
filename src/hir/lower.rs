@@ -137,10 +137,22 @@ impl LoweringContext {
             Some(type_ref) => self.lower_type(&type_ref),
             None => HirType::Void,
         };
-        
+
+        self.enter_scope(); // Function scope
+        self.current_func_ret_type = ret_type.clone();
+
+        let mut params = Vec::new();
+        if let Some((sig_params, _)) = self.functions.get(&name) {
+            params = sig_params.clone();
+            for (p_name, p_ty) in &params {
+                self.declare_var(p_name.clone(), p_ty.clone(), false);
+            }
+        }
+
+        // Spec clauses (requires/ensures) are lowered AFTER entering scope and declaring
+        // parameters, because they can reference the function's formal parameters.
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
-        
         if let Some(spec) = func.spec() {
             for req in spec.requires_clauses() {
                 if let Some(e) = req.expr() {
@@ -151,17 +163,6 @@ impl LoweringContext {
                 if let Some(e) = ens.expr() {
                     ensures.push(self.lower_expr(&e));
                 }
-            }
-        }
-
-        self.enter_scope(); // Function scope
-        self.current_func_ret_type = ret_type.clone();
-
-        let mut params = Vec::new();
-        if let Some((sig_params, _)) = self.functions.get(&name) {
-            params = sig_params.clone();
-            for (p_name, p_ty) in &params {
-                self.declare_var(p_name.clone(), p_ty.clone(), false);
             }
         }
 
@@ -523,5 +524,218 @@ impl LoweringContext {
         };
 
         HirExpr::If(Box::new(cond), then_block, else_block, HirType::Void)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{Parser, ast::{AstNode, SourceFile}};
+    use crate::hir::{HirType, HirStmt, HirExpr, BinaryOp};
+
+    /// Parses `src` and runs the HIR lowering pass.
+    /// Returns `(HirProgram, Vec<SemanticError>)`.
+    fn parse_and_lower(src: &str) -> (HirProgram, Vec<SemanticError>) {
+        let (cst, _parse_errors) = Parser::new(src).parse();
+        let source_file = SourceFile::cast(cst).expect("Root is not a SourceFile");
+        let mut ctx = LoweringContext::new();
+        let program = ctx.lower_program(&source_file);
+        (program, ctx.errors)
+    }
+
+    /// A minimal `func main(): i32 { return 0; }` lowers to one function
+    /// with name "main", return type I32, and no parameters.
+    #[test]
+    fn test_lower_basic_function() {
+        let (prog, errors) = parse_and_lower("func main(): i32 { return 0; }");
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(prog.functions.len(), 1);
+        let f = &prog.functions[0];
+        assert_eq!(f.name, "main");
+        assert_eq!(f.ret_type, HirType::I32);
+        assert!(f.params.is_empty());
+    }
+
+    /// A function with two i32 parameters lowers them in the correct order.
+    #[test]
+    fn test_lower_function_params() {
+        let (prog, errors) = parse_and_lower("func add(a: i32, b: i32): i32 { return a; }");
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        let f = &prog.functions[0];
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[0], ("a".to_string(), HirType::I32));
+        assert_eq!(f.params[1], ("b".to_string(), HirType::I32));
+    }
+
+    /// `const x: i32 = 1;` lowers to `HirStmt::Let("x", is_const=true, I32, IntLiteral(1))`.
+    #[test]
+    fn test_lower_const_let() {
+        let (prog, errors) = parse_and_lower("func f(): i32 { const x: i32 = 1; return x; }");
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        let stmts = &prog.functions[0].body.statements;
+        if let HirStmt::Let(name, is_const, ty, init) = &stmts[0] {
+            assert_eq!(name, "x");
+            assert!(*is_const, "expected const binding");
+            assert_eq!(*ty, HirType::I32);
+            assert!(matches!(init, HirExpr::IntLiteral(1, _)));
+        } else {
+            panic!("Expected HirStmt::Let, got {:?}", stmts[0]);
+        }
+    }
+
+    /// `var y: i32 = 2;` lowers with `is_const = false`.
+    #[test]
+    fn test_lower_var_let() {
+        let (prog, errors) = parse_and_lower("func f(): i32 { var y: i32 = 2; return y; }");
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        if let HirStmt::Let(name, is_const, _, _) = &prog.functions[0].body.statements[0] {
+            assert_eq!(name, "y");
+            assert!(!is_const, "expected mutable binding");
+        } else {
+            panic!("Expected HirStmt::Let");
+        }
+    }
+
+    /// Without an explicit type annotation the type is inferred from the initializer.
+    #[test]
+    fn test_lower_type_inferred_from_initializer() {
+        let (prog, errors) = parse_and_lower("func f(): i32 { const x = 42; return x; }");
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        if let HirStmt::Let(_, _, ty, _) = &prog.functions[0].body.statements[0] {
+            assert_eq!(*ty, HirType::I32, "type should be inferred as I32");
+        } else {
+            panic!("Expected HirStmt::Let");
+        }
+    }
+
+    /// Returning a bool from an i32 function produces a TypeMismatch error.
+    #[test]
+    fn test_lower_return_type_mismatch() {
+        let (_, errors) = parse_and_lower("func f(): i32 { return true; }");
+        assert!(
+            errors.iter().any(|e| matches!(e, SemanticError::TypeMismatch { .. })),
+            "expected TypeMismatch error, got {:?}", errors
+        );
+    }
+
+    /// Using an undeclared variable emits an UndefinedVariable error.
+    #[test]
+    fn test_lower_undefined_variable() {
+        let (_, errors) = parse_and_lower("func f(): i32 { return z; }");
+        assert!(
+            errors.iter().any(|e| matches!(e, SemanticError::UndefinedVariable { .. })),
+            "expected UndefinedVariable error, got {:?}", errors
+        );
+    }
+
+    /// Assigning to a `const` variable emits an ImmutableAssignment error.
+    #[test]
+    fn test_lower_immutable_assignment() {
+        let src = "func f(): i32 { const x: i32 = 1; x = 2; return x; }";
+        let (_, errors) = parse_and_lower(src);
+        assert!(
+            errors.iter().any(|e| matches!(e, SemanticError::ImmutableAssignment { .. })),
+            "expected ImmutableAssignment error, got {:?}", errors
+        );
+    }
+
+    /// Adding an i32 and a bool emits a BinOpMismatch error.
+    #[test]
+    fn test_lower_binop_type_mismatch() {
+        let src = "func f(): i32 { const x: i32 = 1 + true; return x; }";
+        let (_, errors) = parse_and_lower(src);
+        assert!(
+            errors.iter().any(|e| matches!(e, SemanticError::BinOpMismatch { .. })),
+            "expected BinOpMismatch error, got {:?}", errors
+        );
+    }
+
+    /// An if-condition that is not bool emits a TypeMismatch error.
+    #[test]
+    fn test_lower_if_condition_must_be_bool() {
+        let src = "func f(): i32 { if 1 { return 0; } return 1; }";
+        let (_, errors) = parse_and_lower(src);
+        assert!(
+            errors.iter().any(|e| matches!(e, SemanticError::TypeMismatch { .. })),
+            "expected TypeMismatch for non-bool if-condition, got {:?}", errors
+        );
+    }
+
+    /// Multiple functions in one source file are all lowered.
+    #[test]
+    fn test_lower_multiple_functions() {
+        let src = "func a(): i32 { return 1; } func b(): i32 { return 2; }";
+        let (prog, errors) = parse_and_lower(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(prog.functions.len(), 2);
+    }
+
+    /// `spec { requires x > 0; ensures true; }` clauses are extracted into
+    /// the `requires` and `ensures` fields of `HirFunc`.
+    #[test]
+    fn test_lower_spec_clauses() {
+        let src = r#"
+            func f(x: i32): i32
+            spec {
+                requires x > 0;
+                ensures true;
+            }
+            { return x; }
+        "#;
+        let (prog, errors) = parse_and_lower(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        let f = &prog.functions[0];
+        assert_eq!(f.requires.len(), 1, "expected one requires clause");
+        assert_eq!(f.ensures.len(), 1, "expected one ensures clause");
+    }
+
+    /// Struct declarations are lowered into `prog.structs` with correct field types.
+    #[test]
+    fn test_lower_struct_decl() {
+        let src = "struct Point { x: i32, y: i32 } func f(): i32 { return 0; }";
+        let (prog, errors) = parse_and_lower(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        let fields = prog.structs.get("Point").expect("Point struct not found");
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0], ("x".to_string(), HirType::I32));
+        assert_eq!(fields[1], ("y".to_string(), HirType::I32));
+    }
+
+    /// Field access on a struct resolves to the correct field type (I32 for `p.x`).
+    #[test]
+    fn test_lower_field_access_type() {
+        let src = r#"
+            struct Point { x: i32, y: i32 }
+            func f(): i32 {
+                const p: Point = Point { x: 1, y: 2 };
+                return p.x;
+            }
+        "#;
+        let (prog, errors) = parse_and_lower(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        let stmts = &prog.functions[0].body.statements;
+        if let HirStmt::Return(Some(expr)) = stmts.last().unwrap() {
+            assert_eq!(expr.ty(), HirType::I32, "field access should have type I32");
+        } else {
+            panic!("Expected Return statement");
+        }
+    }
+
+    /// Binary arithmetic lowers to `HirExpr::BinaryOp` with the correct operator and result type.
+    #[test]
+    fn test_lower_binary_add() {
+        let src = "func f(): i32 { return 1 + 2; }";
+        let (prog, errors) = parse_and_lower(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        if let HirStmt::Return(Some(expr)) = &prog.functions[0].body.statements[0] {
+            if let HirExpr::BinaryOp(op, _, _, ty) = expr {
+                assert_eq!(*op, BinaryOp::Add);
+                assert_eq!(*ty, HirType::I32);
+            } else {
+                panic!("Expected BinaryOp, got {:?}", expr);
+            }
+        } else {
+            panic!("Expected Return");
+        }
     }
 }

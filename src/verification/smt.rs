@@ -136,7 +136,7 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
     }
 }
 
-fn collect_vars(expr: &SmtExpr, vars: &mut std::collections::HashSet<String>) {
+pub(crate) fn collect_vars(expr: &SmtExpr, vars: &mut std::collections::HashSet<String>) {
     match expr {
         SmtExpr::Var(v) => { vars.insert(v.clone()); },
         SmtExpr::Add(l, r) | SmtExpr::Sub(l, r) | SmtExpr::Mul(l, r) |
@@ -148,5 +148,172 @@ fn collect_vars(expr: &SmtExpr, vars: &mut std::collections::HashSet<String>) {
         }
         SmtExpr::Not(inner) => collect_vars(inner, vars),
         _ => {}
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // to_smtlib2 serialization
+    // ------------------------------------------------------------------
+
+    /// Boolean constants serialize to `"true"` and `"false"`.
+    #[test]
+    fn test_smt_bool_const() {
+        assert_eq!(SmtExpr::BoolConst(true).to_smtlib2(), "true");
+        assert_eq!(SmtExpr::BoolConst(false).to_smtlib2(), "false");
+    }
+
+    /// Integer constants serialize to their decimal string.
+    #[test]
+    fn test_smt_int_const() {
+        assert_eq!(SmtExpr::IntConst(42).to_smtlib2(), "42");
+        assert_eq!(SmtExpr::IntConst(0).to_smtlib2(), "0");
+        assert_eq!(SmtExpr::IntConst(-7).to_smtlib2(), "-7");
+    }
+
+    /// Variables serialize to their name.
+    #[test]
+    fn test_smt_var() {
+        assert_eq!(SmtExpr::Var("x".to_string()).to_smtlib2(), "x");
+    }
+
+    /// Arithmetic operators produce the expected S-expression forms.
+    #[test]
+    fn test_smt_arithmetic() {
+        let add = SmtExpr::Add(Box::new(SmtExpr::IntConst(1)), Box::new(SmtExpr::IntConst(2)));
+        assert_eq!(add.to_smtlib2(), "(+ 1 2)");
+
+        let sub = SmtExpr::Sub(Box::new(SmtExpr::Var("a".into())), Box::new(SmtExpr::IntConst(3)));
+        assert_eq!(sub.to_smtlib2(), "(- a 3)");
+
+        let mul = SmtExpr::Mul(Box::new(SmtExpr::IntConst(2)), Box::new(SmtExpr::IntConst(3)));
+        assert_eq!(mul.to_smtlib2(), "(* 2 3)");
+    }
+
+    /// Comparison operators produce the expected S-expression forms.
+    #[test]
+    fn test_smt_comparisons() {
+        let lt = SmtExpr::Lt(Box::new(SmtExpr::Var("x".into())), Box::new(SmtExpr::IntConst(5)));
+        assert_eq!(lt.to_smtlib2(), "(< x 5)");
+
+        let ge = SmtExpr::Ge(Box::new(SmtExpr::IntConst(10)), Box::new(SmtExpr::Var("y".into())));
+        assert_eq!(ge.to_smtlib2(), "(>= 10 y)");
+
+        let eq = SmtExpr::Eq(Box::new(SmtExpr::Var("a".into())), Box::new(SmtExpr::Var("b".into())));
+        assert_eq!(eq.to_smtlib2(), "(= a b)");
+    }
+
+    /// Logical connectives produce the expected S-expression forms.
+    #[test]
+    fn test_smt_logical() {
+        let and = SmtExpr::And(
+            Box::new(SmtExpr::BoolConst(true)),
+            Box::new(SmtExpr::BoolConst(false)),
+        );
+        assert_eq!(and.to_smtlib2(), "(and true false)");
+
+        let or = SmtExpr::Or(
+            Box::new(SmtExpr::Var("p".into())),
+            Box::new(SmtExpr::Var("q".into())),
+        );
+        assert_eq!(or.to_smtlib2(), "(or p q)");
+
+        let not = SmtExpr::Not(Box::new(SmtExpr::BoolConst(true)));
+        assert_eq!(not.to_smtlib2(), "(not true)");
+
+        let imp = SmtExpr::Implies(
+            Box::new(SmtExpr::Var("pre".into())),
+            Box::new(SmtExpr::Var("post".into())),
+        );
+        assert_eq!(imp.to_smtlib2(), "(=> pre post)");
+    }
+
+    /// A compound expression serializes correctly (nested S-expressions).
+    #[test]
+    fn test_smt_compound() {
+        // (not (= x (+ y 1)))
+        let expr = SmtExpr::Not(Box::new(SmtExpr::Eq(
+            Box::new(SmtExpr::Var("x".into())),
+            Box::new(SmtExpr::Add(
+                Box::new(SmtExpr::Var("y".into())),
+                Box::new(SmtExpr::IntConst(1)),
+            )),
+        )));
+        assert_eq!(expr.to_smtlib2(), "(not (= x (+ y 1)))");
+    }
+
+    // ------------------------------------------------------------------
+    // substitute
+    // ------------------------------------------------------------------
+
+    /// Substituting a variable for an integer constant replaces the var.
+    #[test]
+    fn test_substitute_simple_var() {
+        let expr = SmtExpr::Var("x".to_string());
+        let result = expr.substitute("x", &SmtExpr::IntConst(5));
+        assert_eq!(result.to_smtlib2(), "5");
+    }
+
+    /// Substituting into an expression leaves non-matching variables unchanged.
+    #[test]
+    fn test_substitute_leaves_others() {
+        // (+ x y)[x := 3] = (+ 3 y)
+        let expr = SmtExpr::Add(
+            Box::new(SmtExpr::Var("x".into())),
+            Box::new(SmtExpr::Var("y".into())),
+        );
+        let result = expr.substitute("x", &SmtExpr::IntConst(3));
+        assert_eq!(result.to_smtlib2(), "(+ 3 y)");
+    }
+
+    /// Substitution propagates into nested sub-expressions.
+    #[test]
+    fn test_substitute_nested() {
+        // (not (= x (+ x 1)))[x := 10] = (not (= 10 (+ 10 1)))
+        let expr = SmtExpr::Not(Box::new(SmtExpr::Eq(
+            Box::new(SmtExpr::Var("x".into())),
+            Box::new(SmtExpr::Add(
+                Box::new(SmtExpr::Var("x".into())),
+                Box::new(SmtExpr::IntConst(1)),
+            )),
+        )));
+        let result = expr.substitute("x", &SmtExpr::IntConst(10));
+        assert_eq!(result.to_smtlib2(), "(not (= 10 (+ 10 1)))");
+    }
+
+    /// Constants are unchanged by substitution.
+    #[test]
+    fn test_substitute_on_const_is_noop() {
+        let expr = SmtExpr::IntConst(42);
+        let result = expr.substitute("x", &SmtExpr::IntConst(0));
+        assert_eq!(result.to_smtlib2(), "42");
+    }
+
+    // ------------------------------------------------------------------
+    // collect_vars
+    // ------------------------------------------------------------------
+
+    /// collect_vars finds all variable names in an expression.
+    #[test]
+    fn test_collect_vars() {
+        // (and (< x y) (= z 0))
+        let expr = SmtExpr::And(
+            Box::new(SmtExpr::Lt(
+                Box::new(SmtExpr::Var("x".into())),
+                Box::new(SmtExpr::Var("y".into())),
+            )),
+            Box::new(SmtExpr::Eq(
+                Box::new(SmtExpr::Var("z".into())),
+                Box::new(SmtExpr::IntConst(0)),
+            )),
+        );
+        let mut vars = std::collections::HashSet::new();
+        collect_vars(&expr, &mut vars);
+        assert!(vars.contains("x"), "expected x in vars");
+        assert!(vars.contains("y"), "expected y in vars");
+        assert!(vars.contains("z"), "expected z in vars");
+        assert_eq!(vars.len(), 3);
     }
 }
