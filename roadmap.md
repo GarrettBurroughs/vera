@@ -49,7 +49,7 @@ This document outlines the macro-level phases required to build the complete Ver
 - [ ] **Closures & Function Pointers**: `func(...)` types, C ABI fat pointer closure representation (`fn_ptr`, `env`), anonymous closure expressions `|x| expr`.
 - [ ] **Error Handling (`?`)**: Desugaring the `?` operator for `Result[T, E]`, early return paths.
 - [x] **Loops & Iteration (Part 1)**: `while`, `break`, `continue`.
-- [ ] **Loops & Iteration (Part 2)**: `for` loops (requires arrays/slices first).
+- [x] **Loops & Iteration (Part 2)**: `for` loops (requires arrays/slices first).
 - [ ] **Unsafe Blocks**: `unsafe { ... }` scopes for raw pointer manipulations.
 
 ### 2. Verification & SMT Integration

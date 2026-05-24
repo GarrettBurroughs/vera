@@ -318,6 +318,8 @@ impl<'a> Parser<'a> {
             self.parse_if_expr();
         } else if self.at(SyntaxKind::KwWhile) {
             self.parse_while_stmt();
+        } else if self.at(SyntaxKind::KwFor) {
+            self.parse_for_stmt();
         } else if self.at(SyntaxKind::KwBreak) {
             self.parse_break_stmt();
         } else if self.at(SyntaxKind::KwContinue) {
@@ -349,6 +351,25 @@ impl<'a> Parser<'a> {
         if self.at(SyntaxKind::KwSpec) {
             self.parse_spec_block();
         }
+        if self.at(SyntaxKind::LBrace) {
+            self.parse_block();
+        } else {
+            self.error("Expected loop body block");
+        }
+        self.finish_node();
+    }
+
+    fn parse_for_stmt(&mut self) {
+        self.start_node(SyntaxKind::FOR_STMT);
+        self.expect(SyntaxKind::KwFor);
+        self.expect(SyntaxKind::Ident); // the iteration variable
+        self.expect(SyntaxKind::KwIn);
+        
+        let old = self.forbid_struct_expr;
+        self.forbid_struct_expr = true;
+        self.parse_expr(); // the iterable
+        self.forbid_struct_expr = old;
+        
         if self.at(SyntaxKind::LBrace) {
             self.parse_block();
         } else {

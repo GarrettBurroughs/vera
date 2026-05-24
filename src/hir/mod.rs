@@ -44,6 +44,7 @@ pub enum HirStmt {
     Assert(HirExpr),
     Assume(HirExpr),
     While(HirExpr, HirBlock, Vec<HirExpr>), // condition, body, invariants
+    For(String, HirExpr, HirBlock), // item_name, iterable, body
     Break,
     Continue,
     Error,

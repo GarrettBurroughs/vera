@@ -413,6 +413,27 @@ impl LoweringContext {
             ast::Stmt::ContinueStmt(_) => {
                 HirStmt::Continue
             }
+            ast::Stmt::ForStmt(for_stmt) => {
+                let item_name = for_stmt.item().map(|t| t.text().to_string()).unwrap_or_default();
+                let iterable = for_stmt.iterable().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                
+                let inner_ty = match iterable.ty() {
+                    HirType::Array(t, _) => *t,
+                    HirType::Slice(t) => *t,
+                    HirType::Error => HirType::Error,
+                    _ => {
+                        self.errors.push(SemanticError::Custom(format!("Type {:?} is not iterable", iterable.ty())));
+                        HirType::Error
+                    }
+                };
+                
+                self.enter_scope();
+                self.declare_var(item_name.clone(), inner_ty, false); // iteration variable is not const
+                let body = for_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
+                self.exit_scope();
+                
+                HirStmt::For(item_name, iterable, body)
+            }
         }
     }
 

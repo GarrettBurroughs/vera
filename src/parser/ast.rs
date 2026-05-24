@@ -85,6 +85,7 @@ ast_node!(AssignsClause, SyntaxKind::ASSIGNS_CLAUSE);
 ast_node!(AssertStmt, SyntaxKind::ASSERT_STMT);
 ast_node!(AssumeStmt, SyntaxKind::ASSUME_STMT);
 ast_node!(WhileStmt, SyntaxKind::WHILE_STMT);
+ast_node!(ForStmt, SyntaxKind::FOR_STMT);
 ast_node!(BreakStmt, SyntaxKind::BREAK_STMT);
 ast_node!(ContinueStmt, SyntaxKind::CONTINUE_STMT);
 
@@ -99,6 +100,7 @@ pub enum Stmt {
     ContinueStmt(ContinueStmt),
     AssertStmt(AssertStmt),
     AssumeStmt(AssumeStmt),
+    ForStmt(ForStmt),
 }
 
 impl Stmt {
@@ -113,6 +115,7 @@ impl Stmt {
             SyntaxKind::CONTINUE_STMT => ContinueStmt::cast(node).map(Stmt::ContinueStmt),
             SyntaxKind::ASSERT_STMT => AssertStmt::cast(node).map(Stmt::AssertStmt),
             SyntaxKind::ASSUME_STMT => AssumeStmt::cast(node).map(Stmt::AssumeStmt),
+            SyntaxKind::FOR_STMT => ForStmt::cast(node).map(Stmt::ForStmt),
             _ => None,
         }
     }
@@ -530,6 +533,22 @@ impl WhileStmt {
     
     pub fn spec(&self) -> Option<SpecBlock> {
         self.syntax().children().find_map(SpecBlock::cast)
+    }
+}
+
+impl ForStmt {
+    pub fn item(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    
+    pub fn iterable(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    
+    pub fn body(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
     }
 }
 

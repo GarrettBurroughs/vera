@@ -58,6 +58,7 @@ pub enum SyntaxKind {
     STRUCT_EXPR_FIELD,
     FIELD_EXPR,
     WHILE_STMT,
+    FOR_STMT,
     BREAK_STMT,
     CONTINUE_STMT,
     ENUM_DECL,

@@ -211,6 +211,75 @@ impl<'ctx> CodeGen<'ctx> {
                 // 3. Continue compiling after loop in merge block
                 self.builder.position_at_end(merge_block);
             }
+            HirStmt::For(item_name, iterable, body) => {
+                let iter_val = self.compile_expr(iterable)?;
+                let iter_ty = iterable.ty();
+
+                let (ptr_val, len_val) = match iter_ty {
+                    HirType::Array(_, size) => {
+                        let arr_ty_llvm = self.lower_type(&iter_ty)?;
+                        let arr_ptr = self.builder.build_alloca(arr_ty_llvm, "arr_tmp").unwrap();
+                        self.builder.build_store(arr_ptr, iter_val).unwrap();
+                        let ptr = unsafe { self.builder.build_in_bounds_gep(arr_ty_llvm, arr_ptr, &[self.context.i32_type().const_zero(), self.context.i32_type().const_zero()], "start_ptr") }.unwrap();
+                        let len = self.context.i64_type().const_int(size, false);
+                        (ptr, len)
+                    }
+                    HirType::Slice(_) => {
+                        let slice_val = iter_val.into_struct_value();
+                        let ptr = self.builder.build_extract_value(slice_val, 0, "slice_ptr").unwrap().into_pointer_value();
+                        let len = self.builder.build_extract_value(slice_val, 1, "slice_len").unwrap().into_int_value();
+                        (ptr, len)
+                    }
+                    _ => return Err("Unsupported iterable type".into())
+                };
+
+                let current_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let idx_ptr = self.builder.build_alloca(self.context.i64_type(), "idx").unwrap();
+                self.builder.build_store(idx_ptr, self.context.i64_type().const_zero()).unwrap();
+
+                let header_block = self.context.append_basic_block(current_func, "for.cond");
+                let body_block = self.context.append_basic_block(current_func, "for.body");
+                let merge_block = self.context.append_basic_block(current_func, "for.merge");
+
+                self.builder.build_unconditional_branch(header_block).unwrap();
+                self.builder.position_at_end(header_block);
+
+                let current_idx = self.builder.build_load(self.context.i64_type(), idx_ptr, "current_idx").unwrap().into_int_value();
+                let cond = self.builder.build_int_compare(inkwell::IntPredicate::ULT, current_idx, len_val, "cond").unwrap();
+                self.builder.build_conditional_branch(cond, body_block, merge_block).unwrap();
+
+                self.loop_stack.push((header_block, merge_block));
+                self.builder.position_at_end(body_block);
+
+                let inner_ty_hir = match iter_ty {
+                    HirType::Array(t, _) => *t,
+                    HirType::Slice(t) => *t,
+                    _ => unreachable!()
+                };
+                let inner_ty_llvm = self.lower_type(&inner_ty_hir)?;
+                let item_ptr = unsafe { self.builder.build_in_bounds_gep(inner_ty_llvm, ptr_val, &[current_idx], "item_ptr") }.unwrap();
+                let item_val = self.builder.build_load(inner_ty_llvm, item_ptr, "item_val").unwrap();
+
+                let item_alloca = self.builder.build_alloca(inner_ty_llvm, item_name).unwrap();
+                self.builder.build_store(item_alloca, item_val).unwrap();
+                
+                self.enter_scope();
+                self.scopes.last_mut().unwrap().insert(item_name.clone(), (item_alloca, inner_ty_hir));
+                
+                self.compile_block(body)?;
+
+                self.exit_scope();
+
+                if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                    let current_idx_end = self.builder.build_load(self.context.i64_type(), idx_ptr, "current_idx").unwrap().into_int_value();
+                    let next_idx = self.builder.build_int_add(current_idx_end, self.context.i64_type().const_int(1, false), "next_idx").unwrap();
+                    self.builder.build_store(idx_ptr, next_idx).unwrap();
+                    self.builder.build_unconditional_branch(header_block).unwrap();
+                }
+
+                self.loop_stack.pop();
+                self.builder.position_at_end(merge_block);
+            }
             HirStmt::Break => {
                 if let Some((_, merge_block)) = self.loop_stack.last() {
                     self.builder.build_unconditional_branch(*merge_block).unwrap();
