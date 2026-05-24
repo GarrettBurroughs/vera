@@ -1,3 +1,5 @@
+// run-pass
+// expect-exit-code: 40
 func main(): i32 {
     var x = 10;
     var y = 20;

@@ -1,3 +1,5 @@
+// verify-fail
+
 func main() {
     var arr: array[i32, 5] = [10, 20, 30, 40, 50];
     var sum: i32 = 0;

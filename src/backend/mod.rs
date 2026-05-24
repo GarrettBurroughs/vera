@@ -928,6 +928,8 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         .status()
         .map_err(|e| format!("Failed to run cc: {}", e))?;
         
+    let _ = std::fs::remove_file(&obj_path);
+        
     if !status.success() {
         return Err("Linking failed".to_string());
     }

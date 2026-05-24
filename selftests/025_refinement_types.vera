@@ -1,3 +1,5 @@
+// build-fail
+
 type Nat = i32 where (self >= 0);
 
 func safe_divide(num: i32, den: i32 where (self != 0)): i32 {

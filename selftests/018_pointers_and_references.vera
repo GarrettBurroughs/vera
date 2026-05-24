@@ -1,3 +1,5 @@
+// build-fail
+
 func main(): i32 {
     var x: i32 = 42;
     var y: ref i32 = &x;

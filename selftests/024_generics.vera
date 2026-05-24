@@ -1,3 +1,4 @@
+// build-fail
 func identity<T>(x: T): T {
     return x;
 }

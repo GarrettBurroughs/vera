@@ -159,7 +159,7 @@ fn main() -> miette::Result<()> {
             }
         }
         Commands::Run { file } => {
-            let out_bin = "./.tmp.vera.out".to_string();
+            let out_bin = format!("./.tmp.vera.{}.out", std::process::id());
             if run_compiler_pipeline(file, &cli, false, Some(out_bin.clone())).is_err() {
                 std::process::exit(1);
             }
