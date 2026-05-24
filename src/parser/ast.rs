@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Many AST accessor methods are scaffolded for future compiler phases
 use super::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 pub trait AstNode {

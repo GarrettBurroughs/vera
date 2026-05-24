@@ -83,12 +83,11 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
     let parser = parser::Parser::new(&input);
     let (cst, errors) = parser.parse();
     
-    if let Some(emit_target) = &cli.emit {
-        if emit_target == "cst" {
+    if let Some(emit_target) = &cli.emit
+        && emit_target == "cst" {
             println!("{:#?}", cst);
             return Err(());
         }
-    }
     
     let mut has_errors = false;
     if !errors.is_empty() {
@@ -100,12 +99,11 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
     let mut lower_ctx = hir::lower::LoweringContext::new();
     let hir_program = lower_ctx.lower_program(&source_file);
     
-    if let Some(emit_target) = &cli.emit {
-        if emit_target == "hir" {
+    if let Some(emit_target) = &cli.emit
+        && emit_target == "hir" {
             println!("{:#?}", hir_program);
             return Err(());
         }
-    }
     
     if !lower_ctx.errors.is_empty() {
         for err in lower_ctx.errors { error!("Semantic Error: {}", err); }
@@ -138,11 +136,10 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         return Ok("".to_string());
     }
     
-    if let Some(emit_target) = &cli.emit {
-        if emit_target == "llvm" {
+    if let Some(emit_target) = &cli.emit
+        && emit_target == "llvm" {
             unsafe { std::env::set_var("PRINT_IR", "1") };
         }
-    }
     
     let out_bin = output_bin.unwrap_or_else(|| "a.out".to_string());
     backend::compile_to_binary(&hir_program, &out_bin).expect("Failed to compile");

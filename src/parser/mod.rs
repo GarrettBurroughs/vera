@@ -51,9 +51,9 @@ impl<'a> Parser<'a> {
             while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
                 peek += 1;
             }
-            let mut is_pub = false;
+            let mut _is_pub = false;
             if peek < self.tokens.len() && self.tokens[peek].0 == SyntaxKind::KwPub {
-                is_pub = true;
+                _is_pub = true;
                 peek += 1;
                 while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
                     peek += 1;

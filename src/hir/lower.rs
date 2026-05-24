@@ -50,6 +50,7 @@ struct Scope {
 }
 
 #[derive(Default)]
+#[allow(dead_code)] // `traits` and `impls` fields are scaffolded for the trait system (Phase 3)
 pub struct TemplateRegistry {
     pub funcs: BTreeMap<String, ast::FuncDecl>,
     pub structs: BTreeMap<String, ast::StructDecl>,
@@ -110,7 +111,7 @@ impl LoweringContext {
         let monomorphized_name = if args.is_empty() {
             name.to_string()
         } else {
-            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+            format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_"))
         };
         if self.structs.contains_key(&monomorphized_name) {
             return monomorphized_name;
@@ -127,7 +128,7 @@ impl LoweringContext {
         let monomorphized_name = if args.is_empty() {
             name.to_string()
         } else {
-            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+            format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_"))
         };
         if self.enums.contains_key(&monomorphized_name) {
             return monomorphized_name;
@@ -143,7 +144,7 @@ impl LoweringContext {
         let monomorphized_name = if args.is_empty() {
             name.to_string()
         } else {
-            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+            format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_"))
         };
         if self.variants.contains_key(&monomorphized_name) {
             return monomorphized_name;
@@ -159,7 +160,7 @@ impl LoweringContext {
         let monomorphized_name = if args.is_empty() {
             name.to_string()
         } else {
-            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+            format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_"))
         };
         if self.functions.contains_key(&monomorphized_name) {
             return monomorphized_name;
@@ -167,7 +168,7 @@ impl LoweringContext {
         if let Some(func) = self.generic_templates.funcs.get(name).cloned() {
             self.func_worklist.push((name.to_string(), args.clone()));
             
-            let mut old_env = self.type_env.clone();
+            let old_env = self.type_env.clone();
             self.type_env.clear();
             if let Some(params) = func.generic_params() {
                 for (param, arg) in params.params().zip(args.iter()) {
@@ -236,7 +237,7 @@ pub fn ty_to_string(ty: &HirType) -> String {
         HirType::Func(params, ret) => {
             let mut s = "Func".to_string();
             for p in params {
-                s.push_str("_");
+                s.push('_');
                 s.push_str(&ty_to_string(p));
             }
             s.push_str("_ret_");
@@ -449,15 +450,14 @@ impl LoweringContext {
 
     fn lower_type(&mut self, type_ref: &ast::TypeRef) -> HirType {
         let base_ty = self.lower_type_base(type_ref);
-        if let Some(ref_ty) = type_ref.refinement() {
-            if let Some(cond) = ref_ty.condition() {
+        if let Some(ref_ty) = type_ref.refinement()
+            && let Some(cond) = ref_ty.condition() {
                 self.enter_scope();
                 self.declare_var("self".to_string(), base_ty.clone(), true);
                 let lowered_cond = self.lower_expr(&cond);
                 self.exit_scope();
                 return HirType::Refinement(Box::new(base_ty), Box::new(lowered_cond));
             }
-        }
         base_ty
     }
 
@@ -498,18 +498,17 @@ impl LoweringContext {
             let has_arrow = f.syntax().children_with_tokens().any(|it| it.kind() == crate::parser::syntax::SyntaxKind::Arrow);
             
             let mut param_tys = Vec::new();
-            let ret_ty;
-            if has_arrow && !types.is_empty() {
+            let ret_ty = if has_arrow && !types.is_empty() {
                 for t in types.iter().take(types.len() - 1) {
                     param_tys.push(self.lower_type(t));
                 }
-                ret_ty = self.lower_type(types.last().unwrap());
+                self.lower_type(types.last().unwrap())
             } else {
                 for t in types {
                     param_tys.push(self.lower_type(&t));
                 }
-                ret_ty = HirType::Void;
-            }
+                HirType::Void
+            };
             return HirType::Func(param_tys, Box::new(ret_ty));
         }
 
@@ -703,16 +702,22 @@ impl LoweringContext {
                 }
                 
                 let mut invariants = Vec::new();
+                let mut decreases = None;
                 if let Some(spec) = while_stmt.spec() {
                     for inv in spec.invariant_clauses() {
                         if let Some(expr) = inv.expr() {
                             invariants.push(self.lower_expr(&expr));
                         }
                     }
+                    // Extract the first decreases clause for termination proofs.
+                    decreases = spec.decreases_clauses()
+                        .next()
+                        .and_then(|d| d.expr())
+                        .map(|e| self.lower_expr(&e));
                 }
                 
                 let body = while_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
-                HirStmt::While(cond, body, invariants)
+                HirStmt::While(cond, body, invariants, decreases)
             }
             ast::Stmt::BreakStmt(_) => {
                 HirStmt::Break
@@ -776,8 +781,8 @@ impl LoweringContext {
                 let mut variant_name_opt = None;
                 let mut case_name_opt = None;
                 
-                if let Some(ast::Expr::FieldExpr(field_expr)) = call_expr.callee() {
-                    if let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
+                if let Some(ast::Expr::FieldExpr(field_expr)) = call_expr.callee()
+                    && let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
                         let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                         if self.variants.contains_key(&name) {
                             let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
@@ -786,7 +791,6 @@ impl LoweringContext {
                             case_name_opt = Some(field_name);
                         }
                     }
-                }
                 
                 if is_variant_constructor {
                     let variant_name = variant_name_opt.unwrap();
@@ -827,17 +831,14 @@ impl LoweringContext {
                     let mut direct_name = String::new();
                     if let ast::Expr::NameRef(name_ref) = &callee_ast {
                         let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                        if name == "Ok" || name == "Err" {
-                            is_direct = true;
-                            direct_name = name.clone();
-                        } else if self.functions.contains_key(&name) {
+                        if name == "Ok" || name == "Err" || self.functions.contains_key(&name) {
                             is_direct = true;
                             direct_name = name.clone();
                         } else if self.generic_templates.funcs.contains_key(&name) {
                             self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name) });
                         }
-                    } else if let ast::Expr::GenericInstExpr(gen_inst) = &callee_ast {
-                        if let Some(ast::Expr::NameRef(name_ref)) = gen_inst.expr() {
+                    } else if let ast::Expr::GenericInstExpr(gen_inst) = &callee_ast
+                        && let Some(ast::Expr::NameRef(name_ref)) = gen_inst.expr() {
                             let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                             if self.generic_templates.funcs.contains_key(&name) {
                                 if let Some(generic_args) = gen_inst.generic_args() {
@@ -853,7 +854,6 @@ impl LoweringContext {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("undefined generic function {}", name) });
                             }
                         }
-                    }
                     
                     let mut args = Vec::new();
                     if let Some(arg_list) = call_expr.arg_list() {
@@ -926,13 +926,11 @@ impl LoweringContext {
                     if op == BinaryOp::Assign {
                         if !lhs.is_lvalue() {
                             self.errors.push(SemanticError::Custom("invalid assignment target: not an lvalue".to_string()));
-                        } else if let HirExpr::VarRef(name, _) = &lhs {
-                            if let Some((_, is_const)) = self.lookup_var(name) {
-                                if is_const {
+                        } else if let HirExpr::VarRef(name, _) = &lhs
+                            && let Some((_, is_const)) = self.lookup_var(name)
+                                && is_const {
                                     self.errors.push(SemanticError::ImmutableAssignment { name: name.clone() });
                                 }
-                            }
-                        }
                     }
 
                     if lhs.ty() != HirType::Error && rhs.ty() != HirType::Error {
@@ -954,15 +952,13 @@ impl LoweringContext {
                                 });
                                 return HirExpr::Error;
                             }
-                        } else {
-                            if lhs.ty() != rhs.ty() {
-                                self.errors.push(SemanticError::BinOpMismatch {
-                                    op: tok.text().to_string(),
-                                    lhs: lhs.ty(),
-                                    rhs: rhs.ty(),
-                                });
-                                return HirExpr::Error;
-                            }
+                        } else if lhs.ty() != rhs.ty() {
+                            self.errors.push(SemanticError::BinOpMismatch {
+                                op: tok.text().to_string(),
+                                lhs: lhs.ty(),
+                                rhs: rhs.ty(),
+                            });
+                            return HirExpr::Error;
                         }
                     }
 
@@ -1307,11 +1303,7 @@ impl LoweringContext {
 
         let else_block = if let Some(b) = if_expr.else_branch() {
             if b.kind() == crate::parser::syntax::SyntaxKind::BLOCK_EXPR {
-                if let Some(block) = ast::BlockExpr::cast(b) {
-                    Some(self.lower_block(&block))
-                } else {
-                    None
-                }
+                ast::BlockExpr::cast(b).map(|block| self.lower_block(&block))
             } else if b.kind() == crate::parser::syntax::SyntaxKind::IF_EXPR {
                 if let Some(elif) = ast::IfExpr::cast(b) {
                     let elif_expr = self.lower_if_expr(&elif);
@@ -1421,10 +1413,13 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
             HirStmt::Expr(e) | HirStmt::Assert(e) | HirStmt::Assume(e) => get_captures(e, &mut new_bound, captures),
             HirStmt::Return(Some(e)) => get_captures(e, &mut new_bound, captures),
             HirStmt::Return(None) | HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
-            HirStmt::While(cond, body, invs) => {
+            HirStmt::While(cond, body, invs, decreases) => {
                 get_captures(cond, &mut new_bound, captures);
                 for inv in invs {
                     get_captures(inv, &mut new_bound, captures);
+                }
+                if let Some(dec) = decreases {
+                    get_captures(dec, &mut new_bound, captures);
                 }
                 get_captures_block(body, &mut new_bound, captures);
             }

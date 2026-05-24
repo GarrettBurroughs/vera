@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::collections::BTreeSet;
 use std::process::Command;
 use super::VerificationError;
 
@@ -29,6 +30,7 @@ pub enum SmtExpr {
     Add(Box<SmtExpr>, Box<SmtExpr>),
     Sub(Box<SmtExpr>, Box<SmtExpr>),
     Mul(Box<SmtExpr>, Box<SmtExpr>),
+    Div(Box<SmtExpr>, Box<SmtExpr>),
     Eq(Box<SmtExpr>, Box<SmtExpr>),
     Lt(Box<SmtExpr>, Box<SmtExpr>),
     Gt(Box<SmtExpr>, Box<SmtExpr>),
@@ -38,6 +40,12 @@ pub enum SmtExpr {
     Or(Box<SmtExpr>, Box<SmtExpr>),
     Implies(Box<SmtExpr>, Box<SmtExpr>),
     Not(Box<SmtExpr>),
+    /// Universal quantifier: `(forall ((var Int)) body)`
+    #[allow(dead_code)] // Scaffolded for loop invariant quantifier support (Phase 2)
+    Forall(String, Box<SmtExpr>),
+    /// Existential quantifier: `(exists ((var Int)) body)`
+    #[allow(dead_code)] // Scaffolded for loop invariant quantifier support (Phase 2)
+    Exists(String, Box<SmtExpr>),
 }
 
 impl SmtExpr {
@@ -54,6 +62,7 @@ impl SmtExpr {
             SmtExpr::Add(l, r) => SmtExpr::Add(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Sub(l, r) => SmtExpr::Sub(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Mul(l, r) => SmtExpr::Mul(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
+            SmtExpr::Div(l, r) => SmtExpr::Div(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Eq(l, r) => SmtExpr::Eq(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Lt(l, r) => SmtExpr::Lt(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Gt(l, r) => SmtExpr::Gt(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
@@ -63,6 +72,21 @@ impl SmtExpr {
             SmtExpr::Or(l, r) => SmtExpr::Or(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Implies(l, r) => SmtExpr::Implies(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Not(inner) => SmtExpr::Not(Box::new(inner.substitute(var_name, replacement))),
+            // Quantifiers: do not substitute the bound variable.
+            SmtExpr::Forall(bound, body) => {
+                if bound == var_name {
+                    self.clone() // bound variable shadows; no substitution inside
+                } else {
+                    SmtExpr::Forall(bound.clone(), Box::new(body.substitute(var_name, replacement)))
+                }
+            }
+            SmtExpr::Exists(bound, body) => {
+                if bound == var_name {
+                    self.clone()
+                } else {
+                    SmtExpr::Exists(bound.clone(), Box::new(body.substitute(var_name, replacement)))
+                }
+            }
         }
     }
 
@@ -75,6 +99,7 @@ impl SmtExpr {
             SmtExpr::Add(l, r) => format!("(+ {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Sub(l, r) => format!("(- {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Mul(l, r) => format!("(* {} {})", l.to_smtlib2(), r.to_smtlib2()),
+            SmtExpr::Div(l, r) => format!("(div {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Eq(l, r) => format!("(= {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Lt(l, r) => format!("(< {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Gt(l, r) => format!("(> {} {})", l.to_smtlib2(), r.to_smtlib2()),
@@ -84,6 +109,8 @@ impl SmtExpr {
             SmtExpr::Or(l, r) => format!("(or {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Implies(l, r) => format!("(=> {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Not(inner) => format!("(not {})", inner.to_smtlib2()),
+            SmtExpr::Forall(var, body) => format!("(forall (({} Int)) {})", var, body.to_smtlib2()),
+            SmtExpr::Exists(var, body) => format!("(exists (({} Int)) {})", var, body.to_smtlib2()),
         }
     }
 }
@@ -91,8 +118,8 @@ impl SmtExpr {
 /// Checks satisfiability of the given SMT expression by shelling out to Z3.
 /// Returns Ok(true) if SAT, Ok(false) if UNSAT.
 pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
-    // Collect variables to declare them
-    let mut vars = std::collections::HashSet::new();
+    // Collect variables to declare them; use BTreeSet for deterministic ordering.
+    let mut vars = BTreeSet::new();
     collect_vars(expr, &mut vars);
 
     let mut smt_script = String::new();
@@ -136,10 +163,10 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
     }
 }
 
-pub(crate) fn collect_vars(expr: &SmtExpr, vars: &mut std::collections::HashSet<String>) {
+pub(crate) fn collect_vars(expr: &SmtExpr, vars: &mut BTreeSet<String>) {
     match expr {
         SmtExpr::Var(v) => { vars.insert(v.clone()); },
-        SmtExpr::Add(l, r) | SmtExpr::Sub(l, r) | SmtExpr::Mul(l, r) |
+        SmtExpr::Add(l, r) | SmtExpr::Sub(l, r) | SmtExpr::Mul(l, r) | SmtExpr::Div(l, r) |
         SmtExpr::Eq(l, r) | SmtExpr::Lt(l, r) | SmtExpr::Gt(l, r) |
         SmtExpr::Le(l, r) | SmtExpr::Ge(l, r) | SmtExpr::And(l, r) |
         SmtExpr::Or(l, r) | SmtExpr::Implies(l, r) => {
@@ -147,6 +174,16 @@ pub(crate) fn collect_vars(expr: &SmtExpr, vars: &mut std::collections::HashSet<
             collect_vars(r, vars);
         }
         SmtExpr::Not(inner) => collect_vars(inner, vars),
+        SmtExpr::Forall(bound, body) | SmtExpr::Exists(bound, body) => {
+            // The bound variable is declared by the quantifier itself; don't add it as a free var.
+            let mut inner_vars = vars.clone();
+            collect_vars(body, &mut inner_vars);
+            for v in inner_vars {
+                if &v != bound {
+                    vars.insert(v);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -309,7 +346,7 @@ mod tests {
                 Box::new(SmtExpr::IntConst(0)),
             )),
         );
-        let mut vars = std::collections::HashSet::new();
+        let mut vars = BTreeSet::new();
         collect_vars(&expr, &mut vars);
         assert!(vars.contains("x"), "expected x in vars");
         assert!(vars.contains("y"), "expected y in vars");

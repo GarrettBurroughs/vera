@@ -5,6 +5,7 @@ use crate::lexer::Token;
 /// It encompasses all lexical tokens and all structural nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, FromPrimitive, ToPrimitive)]
 #[allow(non_camel_case_types)]
+#[allow(clippy::upper_case_acronyms)] // CST node names intentionally use SCREAMING_SNAKE_CASE
 pub enum SyntaxKind {
     // We map every Token over exactly
     KwImport, KwAs, KwPub, KwStruct, KwEnum, KwVariant, KwFunc, KwPure,
@@ -224,4 +225,5 @@ impl rowan::Language for VeraLanguage {
 
 pub type SyntaxNode = rowan::SyntaxNode<VeraLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<VeraLanguage>;
+#[allow(dead_code)] // Public API surface for future parser tooling and IDE integration
 pub type SyntaxElement = rowan::SyntaxElement<VeraLanguage>;

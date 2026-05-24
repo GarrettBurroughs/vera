@@ -43,7 +43,8 @@ impl PartialEq for HirType {
 }
 impl Eq for HirType {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // type_aliases and enums fields used in codegen via pattern matching
 pub struct HirProgram {
     pub type_aliases: std::collections::BTreeMap<String, HirType>,
     pub structs: std::collections::BTreeMap<String, Vec<(String, HirType)>>,
@@ -74,7 +75,7 @@ pub enum HirStmt {
     Return(Option<HirExpr>),
     Assert(HirExpr),
     Assume(HirExpr),
-    While(HirExpr, HirBlock, Vec<HirExpr>), // condition, body, invariants
+    While(HirExpr, HirBlock, Vec<HirExpr>, Option<HirExpr>), // condition, body, invariants, decreases
     For(String, HirExpr, HirBlock), // item_name, iterable, body
     Break,
     Continue,
@@ -105,6 +106,7 @@ pub enum HirExpr {
     If(Box<HirExpr>, HirBlock, Option<HirBlock>, HirType),
     StructExpr(String, Vec<(String, HirExpr)>, HirType),
     FieldAccess(Box<HirExpr>, String, HirType),
+    #[allow(dead_code)] // enum_name and variant_name used during LLVM codegen discriminant resolution
     EnumVariant(String, String, u64, HirType), // enum_name, variant_name, value, type
     VariantConstructor(String, String, Vec<HirExpr>, HirType), // variant_name, case_name, args, type
     Match(Box<HirExpr>, Vec<(HirPattern, HirExpr)>, HirType),
@@ -167,7 +169,8 @@ pub mod borrowck;
 #[derive(Debug, Clone)]
 pub enum HirPattern {
     VariantCase(String, Vec<String>), // CaseName, bindings
+    Binding(String),
+    #[allow(dead_code)] // Scaffolded for future literal pattern matching
     Literal(HirExpr),
     Wildcard,
-    Binding(String),
 }

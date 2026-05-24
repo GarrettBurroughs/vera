@@ -3,7 +3,7 @@ use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Tar
 use inkwell::OptimizationLevel;
 use inkwell::builder::Builder;
 use inkwell::module::Module;
-use inkwell::values::{PointerValue, BasicValueEnum, IntValue, BasicMetadataValueEnum, ValueKind};
+use inkwell::values::{PointerValue, BasicValueEnum, BasicMetadataValueEnum};
 use inkwell::types::{BasicTypeEnum, BasicType};
 use std::collections::BTreeMap;
 use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
@@ -66,7 +66,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let tag_ty = self.context.i32_type();
                 let ok_llvm = self.lower_type(ok_ty)?;
                 let err_llvm = self.lower_type(err_ty)?;
-                Ok(self.context.struct_type(&[tag_ty.into(), ok_llvm.into(), err_llvm.into()], false).into())
+                Ok(self.context.struct_type(&[tag_ty.into(), ok_llvm, err_llvm], false).into())
             }
             HirType::Func(_, _) => {
                 let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
@@ -207,7 +207,7 @@ impl<'ctx> CodeGen<'ctx> {
             HirStmt::Expr(expr) => {
                 self.compile_expr(expr)?;
             }
-            HirStmt::While(cond, body, _invariants) => {
+            HirStmt::While(cond, body, _invariants, _decreases) => {
                 let parent_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                 
                 let header_block = self.context.append_basic_block(parent_func, "while.cond");
@@ -358,7 +358,7 @@ impl<'ctx> CodeGen<'ctx> {
                         let slice_llvm_ty = self.lower_type(&base_ty)?;
                         let ptr_ptr = self.builder.build_struct_gep(slice_llvm_ty, base_ptr, 0, "slice_ptr_ptr").unwrap();
                         let ptr_val = self.builder.build_load(self.context.ptr_type(inkwell::AddressSpace::default()), ptr_ptr, "slice_ptr").unwrap().into_pointer_value();
-                        let inner_llvm_ty = self.lower_type(&inner_ty)?;
+                        let inner_llvm_ty = self.lower_type(inner_ty)?;
                         Ok(unsafe { self.builder.build_gep(inner_llvm_ty, ptr_val, &[idx_val], "slice_idx_ptr").unwrap() })
                     }
                     _ => Err("Index on non-array/slice".into()),
@@ -392,7 +392,7 @@ impl<'ctx> CodeGen<'ctx> {
                     Err(format!("Variable {} not found in LLVM codegen", name))
                 }
             }
-            HirExpr::BinaryOp(op, lhs, rhs, ty) => {
+            HirExpr::BinaryOp(op, lhs, rhs, _ty) => {
                 if *op == BinaryOp::Assign {
                     let rhs_val = self.compile_expr(rhs)?;
                     let lhs_ptr = self.compile_lvalue(lhs)?;
@@ -429,7 +429,7 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 Ok(res)
             }
-            HirExpr::UnaryOp(op, inner, ty) => {
+            HirExpr::UnaryOp(op, inner, _ty) => {
                 let inner_ty = inner.ty();
                 let inner_val = self.compile_expr(inner)?;
                 
@@ -548,10 +548,10 @@ impl<'ctx> CodeGen<'ctx> {
                 let tag_ptr = self.builder.build_struct_gep(variant_ty, ptr, 0, "tag_ptr").unwrap();
                 self.builder.build_store(tag_ptr, self.context.i32_type().const_int(case_idx as u64, false)).unwrap();
 
-                if args.len() > 0 {
+                if !args.is_empty() {
                     let mut arg_types = vec![];
                     for arg in args {
-                        arg_types.push(self.lower_type(&arg.ty())?.into());
+                        arg_types.push(self.lower_type(&arg.ty())?);
                     }
                     let payload_struct_ty = self.context.struct_type(&arg_types, false);
                     
@@ -607,7 +607,7 @@ impl<'ctx> CodeGen<'ctx> {
                     
                     self.enter_scope();
                     
-                    if bindings.len() > 0 {
+                    if !bindings.is_empty() {
                         let target_ptr = self.builder.build_alloca(variant_ty_llvm, "match_target_ptr").unwrap();
                         self.builder.build_store(target_ptr, target_val).unwrap();
                         
@@ -616,7 +616,7 @@ impl<'ctx> CodeGen<'ctx> {
                         let case_field_types = &cases[case_idx].1;
                         let mut arg_types = vec![];
                         for ty in case_field_types {
-                            arg_types.push(self.lower_type(ty)?.into());
+                            arg_types.push(self.lower_type(ty)?);
                         }
                         let payload_struct_ty = self.context.struct_type(&arg_types, false);
                         
@@ -683,7 +683,7 @@ impl<'ctx> CodeGen<'ctx> {
                     _ => unreachable!()
                 }
             }
-            HirExpr::SliceExpr(base, start, end, ty) => {
+            HirExpr::SliceExpr(base, start, end, _ty) => {
                 let base_val = self.compile_expr(base)?;
                 let start_val = self.compile_expr(start)?.into_int_value();
                 let end_val = self.compile_expr(end)?.into_int_value();
@@ -878,7 +878,7 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
     };
     
     // Predeclare structs
-    for (name, _) in &hir.structs {
+    for name in hir.structs.keys() {
         let struct_type = codegen.context.opaque_struct_type(name);
         codegen.structs.insert(name.clone(), struct_type);
     }

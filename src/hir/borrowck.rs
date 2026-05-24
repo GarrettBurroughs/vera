@@ -1,11 +1,12 @@
-use super::{HirProgram, HirFunc, HirStmt, HirExpr, HirType, BinaryOp, UnaryOp};
-use std::collections::{HashMap, HashSet};
+use super::{HirProgram, HirFunc, HirStmt, HirExpr, BinaryOp};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BorrowError {
     MutableBorrowConflict(String),     // Cannot borrow as mutable because it's already borrowed
     ImmutableBorrowConflict(String),   // Cannot borrow as immutable because it's already borrowed as mutable
     MutatingBorrowed(String),          // Cannot mutate because it is borrowed
+    #[allow(dead_code)]
     UseMoved(String),                  // Cannot use moved value (optional for now)
 }
 
@@ -67,18 +68,26 @@ impl BorrowChecker {
             HirStmt::Assert(expr) | HirStmt::Assume(expr) => {
                 self.check_expr(expr, ctx);
             }
-            HirStmt::While(cond, body, invariants) => {
+            HirStmt::While(cond, body, invariants, decreases) => {
                 self.check_expr(cond, ctx);
                 for inv in invariants {
                     self.check_expr(inv, ctx);
+                }
+                if let Some(dec) = decreases {
+                    self.check_expr(dec, ctx);
                 }
                 self.check_block(body, ctx);
             }
             HirStmt::For(name, iterable, body) => {
                 self.check_expr(iterable, ctx);
+                // Inline block checking here so we can declare the iteration variable
+                // inside the same scope that the block body uses. Calling check_block
+                // would open a *second* scope around the variable, making it invisible.
                 ctx.enter_scope();
                 ctx.declare_var(name.clone());
-                self.check_block(body, ctx); // wait, block handles enter/exit scope itself
+                for stmt in &body.statements {
+                    self.check_stmt(stmt, ctx);
+                }
                 ctx.exit_scope();
             }
             HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
@@ -94,11 +103,10 @@ impl BorrowChecker {
             }
             HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
                 self.check_expr(rhs, ctx);
-                if let Some(name) = get_root_var(lhs) {
-                    if let Err(e) = ctx.check_write(&name) {
+                if let Some(name) = get_root_var(lhs)
+                    && let Err(e) = ctx.check_write(&name) {
                         self.errors.push(e);
                     }
-                }
                 // also check the lhs itself for array indexing, field access (reads of indices)
                 self.check_expr_lvalue(lhs, ctx);
             }
@@ -112,10 +120,8 @@ impl BorrowChecker {
                         if let Err(e) = ctx.borrow_mut(&name) {
                             self.errors.push(e);
                         }
-                    } else {
-                        if let Err(e) = ctx.borrow_immut(&name) {
-                            self.errors.push(e);
-                        }
+                    } else if let Err(e) = ctx.borrow_immut(&name) {
+                        self.errors.push(e);
                     }
                 }
                 // Also check inner expression for things like array indices
@@ -193,7 +199,7 @@ fn get_root_var(expr: &HirExpr) -> Option<String> {
         HirExpr::VarRef(name, _) => Some(name.clone()),
         HirExpr::FieldAccess(base, _, _) => get_root_var(base),
         HirExpr::IndexExpr(base, _, _) => get_root_var(base),
-        HirExpr::Deref(base, _) => None, // Deref breaks the root var path, since it's a pointer indirection
+        HirExpr::Deref(_base, _) => None, // Deref breaks the root var path, since it's a pointer indirection
         _ => None,
     }
 }
@@ -274,13 +280,9 @@ impl FuncBorrowCtx {
     fn borrow_mut(&mut self, name: &str) -> Result<(), BorrowError> {
         // Can't borrow mut if already borrowed at all
         for scope in &self.scopes {
-            for (borrowed, kind) in &scope.borrows {
+            for (borrowed, _kind) in &scope.borrows {
                 if borrowed == name {
-                    if *kind == BorrowKind::Mut {
-                        return Err(BorrowError::MutableBorrowConflict(name.to_string()));
-                    } else {
-                        return Err(BorrowError::MutableBorrowConflict(name.to_string()));
-                    }
+                    return Err(BorrowError::MutableBorrowConflict(name.to_string()));
                 }
             }
         }

@@ -69,8 +69,8 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr) -> SmtExpr {
         HirStmt::Expr(expr) => {
             // Handle reassignment: `x = E` in HIR is Expr(BinaryOp(Assign, VarRef(x), E))
             // WP(x = E, P) = P[E/x]
-            if let HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = expr {
-                if let HirExpr::VarRef(name, ty) = lhs.as_ref() {
+            if let HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = expr
+                && let HirExpr::VarRef(name, ty) = lhs.as_ref() {
                     let mut post_sub = post.substitute(name, &hir_to_smt(rhs));
                     if let HirType::Refinement(_, cond) = ty {
                         let cond_smt = hir_to_smt(cond).substitute("self", &hir_to_smt(rhs));
@@ -78,12 +78,16 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr) -> SmtExpr {
                     }
                     return post_sub;
                 }
-            }
             // Non-assignment expressions (e.g., side-effect-free calls) don't affect WP.
             post
         }
-        HirStmt::While(_, _, _) | HirStmt::For(_, _, _) => {
+        HirStmt::While(_, _, _, _decreases) => {
             // Loop verification is deferred to Phase 2 of the roadmap.
+            // When implemented: use invariants to construct the inductive WP rule,
+            // and use `_decreases` to generate a termination proof obligation.
+            post
+        }
+        HirStmt::For(_, _, _) => {
             post
         }
         HirStmt::Break => post,
@@ -118,6 +122,7 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
                 BinaryOp::Add => SmtExpr::Add(lhs_smt, rhs_smt),
                 BinaryOp::Sub => SmtExpr::Sub(lhs_smt, rhs_smt),
                 BinaryOp::Mul => SmtExpr::Mul(lhs_smt, rhs_smt),
+                BinaryOp::Div => SmtExpr::Div(lhs_smt, rhs_smt),
                 BinaryOp::Eq => SmtExpr::Eq(lhs_smt, rhs_smt),
                 BinaryOp::Neq => SmtExpr::Not(Box::new(SmtExpr::Eq(lhs_smt, rhs_smt))),
                 BinaryOp::Lt => SmtExpr::Lt(lhs_smt, rhs_smt),
