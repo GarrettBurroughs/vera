@@ -1,0 +1,14 @@
+// run-pass
+// expect-exit-code: 0
+
+pub func main(): i32 {
+    var i: i32 = 0;
+    while i < 5 {
+        i = i + 1;
+    }
+    if i == 5 {
+        return 0;
+    } else {
+        return 1;
+    }
+}

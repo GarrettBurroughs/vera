@@ -64,6 +64,12 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr) -> SmtExpr {
             // Non-assignment expressions (e.g., side-effect-free calls) don't affect WP.
             post
         }
+        HirStmt::While(_, _, _) => {
+            // Loop verification is deferred to Phase 2 of the roadmap.
+            post
+        }
+        HirStmt::Break => post,
+        HirStmt::Continue => post,
         HirStmt::Return(_opt_expr) => {
             // TODO: handle return values in WP
             post

@@ -274,6 +274,33 @@ impl LoweringContext {
                 let expr = assume_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
                 HirStmt::Assume(expr)
             }
+            ast::Stmt::WhileStmt(while_stmt) => {
+                let cond = while_stmt.condition().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                if cond.ty() != HirType::Error && cond.ty() != HirType::Bool {
+                    self.errors.push(SemanticError::TypeMismatch {
+                        expected: HirType::Bool,
+                        found: cond.ty(),
+                    });
+                }
+                
+                let mut invariants = Vec::new();
+                if let Some(spec) = while_stmt.spec() {
+                    for inv in spec.invariant_clauses() {
+                        if let Some(expr) = inv.expr() {
+                            invariants.push(self.lower_expr(&expr));
+                        }
+                    }
+                }
+                
+                let body = while_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
+                HirStmt::While(cond, body, invariants)
+            }
+            ast::Stmt::BreakStmt(_) => {
+                HirStmt::Break
+            }
+            ast::Stmt::ContinueStmt(_) => {
+                HirStmt::Continue
+            }
         }
     }
 

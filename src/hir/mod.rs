@@ -37,6 +37,9 @@ pub enum HirStmt {
     Return(Option<HirExpr>),
     Assert(HirExpr),
     Assume(HirExpr),
+    While(HirExpr, HirBlock, Vec<HirExpr>), // condition, body, invariants
+    Break,
+    Continue,
     Error,
 }
 

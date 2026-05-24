@@ -66,8 +66,14 @@ ast_node!(FieldExpr, SyntaxKind::FIELD_EXPR);
 ast_node!(SpecBlock, SyntaxKind::SPEC_BLOCK);
 ast_node!(RequiresClause, SyntaxKind::REQUIRES_CLAUSE);
 ast_node!(EnsuresClause, SyntaxKind::ENSURES_CLAUSE);
+ast_node!(InvariantClause, SyntaxKind::INVARIANT_CLAUSE);
+ast_node!(DecreasesClause, SyntaxKind::DECREASES_CLAUSE);
+ast_node!(AssignsClause, SyntaxKind::ASSIGNS_CLAUSE);
 ast_node!(AssertStmt, SyntaxKind::ASSERT_STMT);
 ast_node!(AssumeStmt, SyntaxKind::ASSUME_STMT);
+ast_node!(WhileStmt, SyntaxKind::WHILE_STMT);
+ast_node!(BreakStmt, SyntaxKind::BREAK_STMT);
+ast_node!(ContinueStmt, SyntaxKind::CONTINUE_STMT);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Stmt {
@@ -75,6 +81,9 @@ pub enum Stmt {
     LetStmt(LetStmt),
     ExprStmt(ExprStmt),
     IfExpr(IfExpr),
+    WhileStmt(WhileStmt),
+    BreakStmt(BreakStmt),
+    ContinueStmt(ContinueStmt),
     AssertStmt(AssertStmt),
     AssumeStmt(AssumeStmt),
 }
@@ -86,6 +95,9 @@ impl Stmt {
             SyntaxKind::LET_STMT => LetStmt::cast(node).map(Stmt::LetStmt),
             SyntaxKind::EXPR_STMT => ExprStmt::cast(node).map(Stmt::ExprStmt),
             SyntaxKind::IF_EXPR => IfExpr::cast(node).map(Stmt::IfExpr),
+            SyntaxKind::WHILE_STMT => WhileStmt::cast(node).map(Stmt::WhileStmt),
+            SyntaxKind::BREAK_STMT => BreakStmt::cast(node).map(Stmt::BreakStmt),
+            SyntaxKind::CONTINUE_STMT => ContinueStmt::cast(node).map(Stmt::ContinueStmt),
             SyntaxKind::ASSERT_STMT => AssertStmt::cast(node).map(Stmt::AssertStmt),
             SyntaxKind::ASSUME_STMT => AssumeStmt::cast(node).map(Stmt::AssumeStmt),
             _ => None,
@@ -379,6 +391,18 @@ impl SpecBlock {
     pub fn ensures_clauses(&self) -> impl Iterator<Item = EnsuresClause> {
         self.syntax().children().filter_map(EnsuresClause::cast)
     }
+
+    pub fn invariant_clauses(&self) -> impl Iterator<Item = InvariantClause> {
+        self.syntax().children().filter_map(InvariantClause::cast)
+    }
+
+    pub fn decreases_clauses(&self) -> impl Iterator<Item = DecreasesClause> {
+        self.syntax().children().filter_map(DecreasesClause::cast)
+    }
+
+    pub fn assigns_clauses(&self) -> impl Iterator<Item = AssignsClause> {
+        self.syntax().children().filter_map(AssignsClause::cast)
+    }
 }
 
 impl RequiresClause {
@@ -388,6 +412,24 @@ impl RequiresClause {
 }
 
 impl EnsuresClause {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl InvariantClause {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl DecreasesClause {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl AssignsClause {
     pub fn expr(&self) -> Option<Expr> {
         self.syntax().children().find_map(Expr::cast)
     }
@@ -404,3 +446,20 @@ impl AssumeStmt {
         self.syntax().children().find_map(Expr::cast)
     }
 }
+
+impl WhileStmt {
+    pub fn condition(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    
+    pub fn body(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
+    }
+    
+    pub fn spec(&self) -> Option<SpecBlock> {
+        self.syntax().children().find_map(SpecBlock::cast)
+    }
+}
+
+impl BreakStmt {}
+impl ContinueStmt {}

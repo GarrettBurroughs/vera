@@ -15,6 +15,7 @@ struct CodeGen<'ctx> {
     scopes: Vec<BTreeMap<String, (PointerValue<'ctx>, HirType)>>,
     struct_layouts: BTreeMap<String, Vec<(String, HirType)>>,
     structs: BTreeMap<String, inkwell::types::StructType<'ctx>>,
+    loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -157,6 +158,48 @@ impl<'ctx> CodeGen<'ctx> {
             }
             HirStmt::Expr(expr) => {
                 self.compile_expr(expr)?;
+            }
+            HirStmt::While(cond, body, _invariants) => {
+                let parent_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                
+                let header_block = self.context.append_basic_block(parent_func, "while.cond");
+                let body_block = self.context.append_basic_block(parent_func, "while.body");
+                let merge_block = self.context.append_basic_block(parent_func, "while.end");
+                
+                self.builder.build_unconditional_branch(header_block).unwrap();
+                
+                // 1. Compile condition in header block
+                self.builder.position_at_end(header_block);
+                let cond_val = self.compile_expr(cond)?.into_int_value();
+                self.builder.build_conditional_branch(cond_val, body_block, merge_block).unwrap();
+                
+                // 2. Compile body block
+                self.loop_stack.push((header_block, merge_block));
+                self.builder.position_at_end(body_block);
+                self.compile_block(body)?;
+                
+                // If the body doesn't end with a terminator, branch back to loop condition header
+                if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                    self.builder.build_unconditional_branch(header_block).unwrap();
+                }
+                self.loop_stack.pop();
+                
+                // 3. Continue compiling after loop in merge block
+                self.builder.position_at_end(merge_block);
+            }
+            HirStmt::Break => {
+                if let Some((_, merge_block)) = self.loop_stack.last() {
+                    self.builder.build_unconditional_branch(*merge_block).unwrap();
+                } else {
+                    return Err("break statement outside of loop".into());
+                }
+            }
+            HirStmt::Continue => {
+                if let Some((header_block, _)) = self.loop_stack.last() {
+                    self.builder.build_unconditional_branch(*header_block).unwrap();
+                } else {
+                    return Err("continue statement outside of loop".into());
+                }
             }
             HirStmt::Assert(_) | HirStmt::Assume(_) => {
                 // Verification statements are erased during code generation.
@@ -330,6 +373,7 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         scopes: Vec::new(),
         struct_layouts: hir.structs.clone(),
         structs: BTreeMap::new(),
+        loop_stack: Vec::new(),
     };
     
     // Predeclare structs

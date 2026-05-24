@@ -229,8 +229,26 @@ impl<'a> Parser<'a> {
                 self.parse_expr();
                 self.expect(SyntaxKind::Semi);
                 self.finish_node();
+            } else if self.at(SyntaxKind::KwInvariant) {
+                self.start_node(SyntaxKind::INVARIANT_CLAUSE);
+                self.advance();
+                self.parse_expr();
+                self.expect(SyntaxKind::Semi);
+                self.finish_node();
+            } else if self.at(SyntaxKind::KwDecreases) {
+                self.start_node(SyntaxKind::DECREASES_CLAUSE);
+                self.advance();
+                self.parse_expr();
+                self.expect(SyntaxKind::Semi);
+                self.finish_node();
+            } else if self.at(SyntaxKind::KwAssigns) {
+                self.start_node(SyntaxKind::ASSIGNS_CLAUSE);
+                self.advance();
+                self.parse_expr();
+                self.expect(SyntaxKind::Semi);
+                self.finish_node();
             } else {
-                self.error("Expected requires or ensures");
+                self.error("Expected requires, ensures, invariant, decreases, or assigns");
                 self.advance();
             }
         }
@@ -246,6 +264,12 @@ impl<'a> Parser<'a> {
             self.parse_let_stmt();
         } else if self.at(SyntaxKind::KwIf) {
             self.parse_if_expr();
+        } else if self.at(SyntaxKind::KwWhile) {
+            self.parse_while_stmt();
+        } else if self.at(SyntaxKind::KwBreak) {
+            self.parse_break_stmt();
+        } else if self.at(SyntaxKind::KwContinue) {
+            self.parse_continue_stmt();
         } else if self.at(SyntaxKind::KwAssert) {
             self.start_node(SyntaxKind::ASSERT_STMT);
             self.advance();
@@ -261,6 +285,35 @@ impl<'a> Parser<'a> {
         } else {
             self.parse_expr_stmt();
         }
+    }
+
+    fn parse_while_stmt(&mut self) {
+        self.start_node(SyntaxKind::WHILE_STMT);
+        self.expect(SyntaxKind::KwWhile);
+        self.parse_expr();
+        if self.at(SyntaxKind::KwSpec) {
+            self.parse_spec_block();
+        }
+        if self.at(SyntaxKind::LBrace) {
+            self.parse_block();
+        } else {
+            self.error("Expected loop body block");
+        }
+        self.finish_node();
+    }
+
+    fn parse_break_stmt(&mut self) {
+        self.start_node(SyntaxKind::BREAK_STMT);
+        self.expect(SyntaxKind::KwBreak);
+        self.expect(SyntaxKind::Semi);
+        self.finish_node();
+    }
+
+    fn parse_continue_stmt(&mut self) {
+        self.start_node(SyntaxKind::CONTINUE_STMT);
+        self.expect(SyntaxKind::KwContinue);
+        self.expect(SyntaxKind::Semi);
+        self.finish_node();
     }
     
     fn parse_let_stmt(&mut self) {
