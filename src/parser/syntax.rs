@@ -58,6 +58,7 @@ pub enum SyntaxKind {
     STRUCT_EXPR_FIELD,
     FIELD_EXPR,
     WHILE_STMT,
+    UNSAFE_BLOCK,
     FOR_STMT,
     BREAK_STMT,
     CONTINUE_STMT,
@@ -79,7 +80,6 @@ pub enum SyntaxKind {
     RESULT_TYPE,
     POINTER_TYPE,
     REF_TYPE,
-    UNSAFE_BLOCK,
     ERROR_NODE,
 }
 

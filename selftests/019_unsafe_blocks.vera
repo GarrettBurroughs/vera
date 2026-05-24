@@ -1,0 +1,14 @@
+// run-pass
+
+func main(): i32 {
+    var x: i32 = 42;
+    var p: ptr i32 = &x;
+    var y: i32 = unsafe { *p; };
+    unsafe {
+        *p = 100;
+    };
+    if x != 100 {
+        return 1;
+    }
+    return 0;
+}

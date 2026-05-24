@@ -739,6 +739,15 @@ impl<'a> Parser<'a> {
             }
             self.expect(SyntaxKind::RBracket);
             self.finish_node();
+        } else if self.at(SyntaxKind::KwUnsafe) {
+            self.start_node(SyntaxKind::UNSAFE_BLOCK);
+            self.advance(); // consume unsafe
+            if self.at(SyntaxKind::LBrace) {
+                self.parse_block();
+            } else {
+                self.error("Expected '{' after 'unsafe'");
+            }
+            self.finish_node();
         } else {
             self.error("Expected expression");
             self.advance(); // Prevent infinite loop

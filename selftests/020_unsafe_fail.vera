@@ -1,0 +1,8 @@
+// build-fail
+
+func main(): i32 {
+    var x: i32 = 42;
+    var p: ptr i32 = &x;
+    var y: i32 = *p; // Error: Dereference of raw pointer requires unsafe block
+    return 0;
+}

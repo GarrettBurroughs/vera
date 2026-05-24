@@ -85,6 +85,7 @@ pub enum HirExpr {
     ResultErr(Box<HirExpr>, HirType), // inner expr, result type
     Ref(Box<HirExpr>, bool, HirType), // inner expr, is_mut, result type
     Deref(Box<HirExpr>, HirType), // inner expr, result type
+    Block(HirBlock, HirType),
     Error,
 }
 
@@ -111,6 +112,7 @@ impl HirExpr {
             HirExpr::ResultErr(_, ty) => ty.clone(),
             HirExpr::Ref(_, _, ty) => ty.clone(),
             HirExpr::Deref(_, ty) => ty.clone(),
+            HirExpr::Block(_, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
     }

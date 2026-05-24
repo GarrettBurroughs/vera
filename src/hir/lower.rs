@@ -57,6 +57,7 @@ pub struct LoweringContext {
     pub enums: BTreeMap<String, Vec<String>>, // name -> variants
     pub variants: BTreeMap<String, Vec<(String, Vec<HirType>)>>, // name -> cases
     current_func_ret_type: HirType,
+    in_unsafe_block: bool,
 }
 
 impl LoweringContext {
@@ -69,6 +70,7 @@ impl LoweringContext {
             enums: BTreeMap::new(),
             variants: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
+            in_unsafe_block: false,
         }
     }
 
@@ -93,6 +95,16 @@ impl LoweringContext {
             }
         }
         None
+    }
+
+    fn types_compatible(&self, expected: &HirType, found: &HirType) -> bool {
+        if expected == found {
+            return true;
+        }
+        match (expected, found) {
+            (HirType::Ptr(t1, _), HirType::Ref(t2, _)) => t1 == t2,
+            _ => false,
+        }
     }
 
     pub fn lower_program(&mut self, source_file: &ast::SourceFile) -> HirProgram {
@@ -375,7 +387,7 @@ impl LoweringContext {
                     initializer.ty()
                 };
 
-                if initializer.ty() != HirType::Error && declared_ty != HirType::Error && initializer.ty() != declared_ty {
+                if initializer.ty() != HirType::Error && declared_ty != HirType::Error && !self.types_compatible(&declared_ty, &initializer.ty()) {
                     self.errors.push(SemanticError::TypeMismatch {
                         expected: declared_ty.clone(),
                         found: initializer.ty(),
@@ -605,6 +617,15 @@ impl LoweringContext {
                     if lhs.ty() != HirType::Error && rhs.ty() != HirType::Error {
                         if op != BinaryOp::Eq && op != BinaryOp::Neq && op != BinaryOp::Assign {
                             if lhs.ty() != expected_ty || rhs.ty() != expected_ty {
+                                self.errors.push(SemanticError::BinOpMismatch {
+                                    op: tok.text().to_string(),
+                                    lhs: lhs.ty(),
+                                    rhs: rhs.ty(),
+                                });
+                                return HirExpr::Error;
+                            }
+                        } else if op == BinaryOp::Assign {
+                            if !self.types_compatible(&lhs.ty(), &rhs.ty()) {
                                 self.errors.push(SemanticError::BinOpMismatch {
                                     op: tok.text().to_string(),
                                     lhs: lhs.ty(),
@@ -876,7 +897,13 @@ impl LoweringContext {
             ast::Expr::DerefExpr(deref_expr) => {
                 let inner = deref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
                 let ty = match inner.ty() {
-                    HirType::Ref(t, _) | HirType::Ptr(t, _) => *t,
+                    HirType::Ref(t, _) => *t,
+                    HirType::Ptr(t, _) => {
+                        if !self.in_unsafe_block {
+                            self.errors.push(SemanticError::Custom("Dereference of raw pointer requires unsafe block".to_string()));
+                        }
+                        *t
+                    },
                     HirType::Error => HirType::Error,
                     other => {
                         self.errors.push(SemanticError::Custom(format!("Cannot dereference non-pointer type {:?}", other)));
@@ -884,6 +911,18 @@ impl LoweringContext {
                     }
                 };
                 HirExpr::Deref(Box::new(inner), ty)
+            }
+            ast::Expr::UnsafeBlock(unsafe_block) => {
+                let prev = self.in_unsafe_block;
+                self.in_unsafe_block = true;
+                let block = unsafe_block.block().map(|b| self.lower_block(&b)).unwrap_or_else(|| HirBlock { statements: vec![] });
+                let ty = if let Some(HirStmt::Expr(e)) = block.statements.last() {
+                    e.ty()
+                } else {
+                    HirType::Void
+                };
+                self.in_unsafe_block = prev;
+                HirExpr::Block(block, ty)
             }
         }
     }

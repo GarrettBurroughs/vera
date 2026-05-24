@@ -68,6 +68,7 @@ ast_node!(ArgList, SyntaxKind::ARG_LIST);
 ast_node!(TryExpr, SyntaxKind::TRY_EXPR);
 ast_node!(RefExpr, SyntaxKind::REF_EXPR);
 ast_node!(DerefExpr, SyntaxKind::DEREF_EXPR);
+ast_node!(UnsafeBlock, SyntaxKind::UNSAFE_BLOCK);
 
 ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
 ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
@@ -144,6 +145,7 @@ pub enum Expr {
     TryExpr(TryExpr),
     RefExpr(RefExpr),
     DerefExpr(DerefExpr),
+    UnsafeBlock(UnsafeBlock),
 }
 
 impl Expr {
@@ -164,6 +166,7 @@ impl Expr {
             SyntaxKind::TRY_EXPR => TryExpr::cast(node).map(Expr::TryExpr),
             SyntaxKind::REF_EXPR => RefExpr::cast(node).map(Expr::RefExpr),
             SyntaxKind::DEREF_EXPR => DerefExpr::cast(node).map(Expr::DerefExpr),
+            SyntaxKind::UNSAFE_BLOCK => UnsafeBlock::cast(node).map(Expr::UnsafeBlock),
             _ => None,
         }
     }
@@ -655,6 +658,12 @@ impl MatchExpr {
     }
     pub fn arms(&self) -> impl Iterator<Item = MatchArm> {
         self.syntax().children().filter_map(MatchArm::cast)
+    }
+}
+
+impl UnsafeBlock {
+    pub fn block(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
     }
 }
 

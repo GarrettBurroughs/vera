@@ -738,6 +738,25 @@ impl<'ctx> CodeGen<'ctx> {
                 let ty = self.lower_type(&expr.ty())?;
                 Ok(self.builder.build_load(ty, inner_val, "deref").unwrap())
             }
+            HirExpr::Block(block, _) => {
+                let mut last_val = None;
+                for stmt in &block.statements {
+                    if self.builder.get_insert_block().unwrap().get_terminator().is_some() {
+                        break;
+                    }
+                    if let HirStmt::Expr(e) = stmt {
+                        last_val = Some(self.compile_expr(e)?);
+                    } else {
+                        self.compile_stmt(stmt)?;
+                        last_val = None;
+                    }
+                }
+                if let Some(val) = last_val {
+                    Ok(val)
+                } else {
+                    Ok(self.context.i32_type().const_zero().into()) // dummy void
+                }
+            }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
     }
