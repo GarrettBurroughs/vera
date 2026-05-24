@@ -74,6 +74,8 @@ impl<'a> Parser<'a> {
                 self.parse_trait_decl();
             } else if kind == SyntaxKind::KwImpl {
                 self.parse_impl_decl();
+            } else if kind == SyntaxKind::KwType {
+                self.parse_type_alias();
             } else {
                 self.error("Expected function, struct, enum, trait, impl, or variant declaration");
                 self.advance();
@@ -330,6 +332,23 @@ impl<'a> Parser<'a> {
             self.error("Expected type");
             self.advance();
         }
+        
+        if self.at(SyntaxKind::KwWhere) {
+            self.start_node(SyntaxKind::REFINEMENT_TYPE);
+            self.advance(); // where
+            if self.at(SyntaxKind::LParen) {
+                self.advance(); // (
+                let old = self.forbid_struct_expr;
+                self.forbid_struct_expr = true;
+                self.parse_expr();
+                self.forbid_struct_expr = old;
+                self.expect(SyntaxKind::RParen);
+            } else {
+                self.error("Expected '(' after where");
+            }
+            self.finish_node();
+        }
+        
         self.finish_node();
     }
     
@@ -781,6 +800,22 @@ impl<'a> Parser<'a> {
             self.parse_func();
         }
         self.expect(SyntaxKind::RBrace);
+        self.finish_node();
+    }
+
+    fn parse_type_alias(&mut self) {
+        self.start_node(SyntaxKind::TYPE_ALIAS);
+        
+        if self.at(SyntaxKind::KwPub) {
+            self.advance();
+        }
+        
+        self.expect(SyntaxKind::KwType);
+        self.expect(SyntaxKind::Ident);
+        self.expect(SyntaxKind::Eq);
+        self.parse_type();
+        self.expect(SyntaxKind::Semi);
+        
         self.finish_node();
     }
     

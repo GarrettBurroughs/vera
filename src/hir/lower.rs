@@ -72,6 +72,7 @@ pub struct LoweringContext {
     pub struct_worklist: Vec<(String, Vec<HirType>)>,
     pub enum_worklist: Vec<(String, Vec<HirType>)>,
     pub variant_worklist: Vec<(String, Vec<HirType>)>,
+    pub type_aliases: BTreeMap<String, HirType>,
     current_func_ret_type: HirType,
     in_unsafe_block: bool,
 }
@@ -91,6 +92,7 @@ impl LoweringContext {
             struct_worklist: Vec::new(),
             enum_worklist: Vec::new(),
             variant_worklist: Vec::new(),
+            type_aliases: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
             in_unsafe_block: false,
         }
@@ -241,6 +243,7 @@ pub fn ty_to_string(ty: &HirType) -> String {
             s.push_str(&ty_to_string(ret));
             s
         }
+        HirType::Refinement(base, _) => format!("Refinement_{}", ty_to_string(base)),
         HirType::Result(ok, err) => format!("Result_{}_{}", ty_to_string(ok), ty_to_string(err)),
         HirType::Error => "Error".to_string(),
     }
@@ -257,6 +260,16 @@ impl LoweringContext {
         self.struct_worklist.clear();
         self.enum_worklist.clear();
         self.variant_worklist.clear();
+        self.type_aliases.clear();
+
+        for a in source_file.type_aliases() {
+            let name = a.name().map(|n| n.text().to_string()).unwrap_or_default();
+            if let Some(ty_ref) = a.ty() {
+                let lowered = self.lower_type(&ty_ref);
+                self.type_env.insert(name.clone(), lowered.clone());
+                self.type_aliases.insert(name, lowered);
+            }
+        }
 
         // Pass 0: Gather templates
         for s in source_file.structs() {
@@ -383,6 +396,7 @@ impl LoweringContext {
         }
 
         HirProgram {
+            type_aliases: self.type_aliases.clone(),
             structs: self.structs.clone(),
             enums: self.enums.clone(),
             variants: self.variants.clone(),
@@ -434,6 +448,20 @@ impl LoweringContext {
     }
 
     fn lower_type(&mut self, type_ref: &ast::TypeRef) -> HirType {
+        let base_ty = self.lower_type_base(type_ref);
+        if let Some(ref_ty) = type_ref.refinement() {
+            if let Some(cond) = ref_ty.condition() {
+                self.enter_scope();
+                self.declare_var("self".to_string(), base_ty.clone(), true);
+                let lowered_cond = self.lower_expr(&cond);
+                self.exit_scope();
+                return HirType::Refinement(Box::new(base_ty), Box::new(lowered_cond));
+            }
+        }
+        base_ty
+    }
+
+    fn lower_type_base(&mut self, type_ref: &ast::TypeRef) -> HirType {
         if let Some(arr) = type_ref.syntax().children().find_map(ast::ArrayType::cast) {
             let inner_ty = arr.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
             let size = arr.size().and_then(|lit| {

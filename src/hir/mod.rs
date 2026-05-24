@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum HirType {
     I32,
     Bool,
@@ -12,11 +12,40 @@ pub enum HirType {
     Ptr(Box<HirType>, bool), // (type, is_mut)
     Ref(Box<HirType>, bool), // (type, is_mut)
     Func(Vec<HirType>, Box<HirType>), // (param_types, ret_type)
+    Refinement(Box<HirType>, Box<HirExpr>), // (base_type, condition)
     Error,
 }
 
+impl PartialEq for HirType {
+    fn eq(&self, other: &Self) -> bool {
+        let mut a = self;
+        let mut b = other;
+        while let HirType::Refinement(base, _) = a { a = base; }
+        while let HirType::Refinement(base, _) = b { b = base; }
+        
+        match (a, b) {
+            (HirType::I32, HirType::I32) => true,
+            (HirType::Bool, HirType::Bool) => true,
+            (HirType::Void, HirType::Void) => true,
+            (HirType::Struct(s1), HirType::Struct(s2)) => s1 == s2,
+            (HirType::Enum(e1), HirType::Enum(e2)) => e1 == e2,
+            (HirType::Variant(v1), HirType::Variant(v2)) => v1 == v2,
+            (HirType::Array(t1, s1), HirType::Array(t2, s2)) => t1 == t2 && s1 == s2,
+            (HirType::Slice(t1), HirType::Slice(t2)) => t1 == t2,
+            (HirType::Result(o1, e1), HirType::Result(o2, e2)) => o1 == o2 && e1 == e2,
+            (HirType::Ptr(t1, m1), HirType::Ptr(t2, m2)) => t1 == t2 && m1 == m2,
+            (HirType::Ref(t1, m1), HirType::Ref(t2, m2)) => t1 == t2 && m1 == m2,
+            (HirType::Func(p1, r1), HirType::Func(p2, r2)) => p1 == p2 && r1 == r2,
+            (HirType::Error, HirType::Error) => true,
+            _ => false,
+        }
+    }
+}
+impl Eq for HirType {}
+
 #[derive(Debug, Clone)]
 pub struct HirProgram {
+    pub type_aliases: std::collections::BTreeMap<String, HirType>,
     pub structs: std::collections::BTreeMap<String, Vec<(String, HirType)>>,
     pub enums: std::collections::BTreeMap<String, Vec<String>>,
     pub variants: std::collections::BTreeMap<String, Vec<(String, Vec<HirType>)>>,

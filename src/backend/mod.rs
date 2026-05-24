@@ -73,6 +73,7 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.context.struct_type(&[ptr_ty.into(), ptr_ty.into()], false).into())
             }
             HirType::Error => Err("Cannot lower error type".into()),
+            HirType::Refinement(base, _) => self.lower_type(base),
         }
     }
 

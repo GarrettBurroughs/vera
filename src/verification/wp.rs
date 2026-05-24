@@ -23,6 +23,14 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
         precondition = SmtExpr::And(Box::new(precondition), Box::new(hir_to_smt(req)));
     }
 
+    // 3.5. Add parameter refinement constraints as preconditions
+    for (p_name, p_ty) in &func.params {
+        if let HirType::Refinement(_, cond) = p_ty {
+            let cond_smt = hir_to_smt(cond).substitute("self", &SmtExpr::Var(p_name.clone()));
+            precondition = SmtExpr::And(Box::new(precondition), Box::new(cond_smt));
+        }
+    }
+
     // 4. Final Verification Condition (VC): Requires => WP
     let vc = SmtExpr::Implies(Box::new(precondition), Box::new(current_wp));
 
@@ -49,16 +57,26 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr) -> SmtExpr {
             // WP(assume Q, P) = Q => P
             SmtExpr::Implies(Box::new(hir_to_smt(expr)), Box::new(post))
         }
-        HirStmt::Let(name, _, _, init) => {
+        HirStmt::Let(name, _, ty, init) => {
             // WP(x = E, P) = P[E/x]
-            post.substitute(name, &hir_to_smt(init))
+            let mut post_sub = post.substitute(name, &hir_to_smt(init));
+            if let HirType::Refinement(_, cond) = ty {
+                let cond_smt = hir_to_smt(cond).substitute("self", &hir_to_smt(init));
+                post_sub = SmtExpr::And(Box::new(cond_smt), Box::new(post_sub));
+            }
+            post_sub
         }
         HirStmt::Expr(expr) => {
             // Handle reassignment: `x = E` in HIR is Expr(BinaryOp(Assign, VarRef(x), E))
             // WP(x = E, P) = P[E/x]
             if let HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = expr {
-                if let HirExpr::VarRef(name, _) = lhs.as_ref() {
-                    return post.substitute(name, &hir_to_smt(rhs));
+                if let HirExpr::VarRef(name, ty) = lhs.as_ref() {
+                    let mut post_sub = post.substitute(name, &hir_to_smt(rhs));
+                    if let HirType::Refinement(_, cond) = ty {
+                        let cond_smt = hir_to_smt(cond).substitute("self", &hir_to_smt(rhs));
+                        post_sub = SmtExpr::And(Box::new(cond_smt), Box::new(post_sub));
+                    }
+                    return post_sub;
                 }
             }
             // Non-assignment expressions (e.g., side-effect-free calls) don't affect WP.

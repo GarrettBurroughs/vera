@@ -8,7 +8,7 @@ use crate::lexer::Token;
 pub enum SyntaxKind {
     // We map every Token over exactly
     KwImport, KwAs, KwPub, KwStruct, KwEnum, KwVariant, KwFunc, KwPure,
-    KwType, KwTrait, KwImpl, KwFor, KwConst, KwVar, KwIf, KwElse, KwWhile,
+    KwType, KwWhere, KwTrait, KwImpl, KwFor, KwConst, KwVar, KwIf, KwElse, KwWhile,
     KwIn, KwReturn, KwBreak, KwContinue, KwGhost, KwMatch, KwCase, KwUnsafe,
     KwSpec, KwRequires, KwEnsures, KwAssert, KwAssume, KwAssigns, KwInvariant, KwDecreases,
     
@@ -87,6 +87,8 @@ pub enum SyntaxKind {
     GENERIC_PARAMS,
     GENERIC_ARGS,
     GENERIC_INST_EXPR,
+    TYPE_ALIAS,
+    REFINEMENT_TYPE,
     ERROR_NODE,
 }
 
@@ -102,6 +104,7 @@ impl From<Token> for SyntaxKind {
             Token::KwFunc => SyntaxKind::KwFunc,
             Token::KwPure => SyntaxKind::KwPure,
             Token::KwType => SyntaxKind::KwType,
+            Token::KwWhere => SyntaxKind::KwWhere,
             Token::KwTrait => SyntaxKind::KwTrait,
             Token::KwImpl => SyntaxKind::KwImpl,
             Token::KwFor => SyntaxKind::KwFor,

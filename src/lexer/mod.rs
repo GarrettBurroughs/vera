@@ -15,6 +15,7 @@ pub enum Token {
     #[token("func")] KwFunc,
     #[token("pure")] KwPure,
     #[token("type")] KwType,
+    #[token("where")] KwWhere,
     #[token("trait")] KwTrait,
     #[token("impl")] KwImpl,
     #[token("for")] KwFor,
@@ -138,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_lex_keywords() {
-        let input = "import pub func if while return match unsafe array slice";
+        let input = "import pub func if while return match unsafe array slice where";
         let mut lexer = Token::lexer(input);
         assert_eq!(lexer.next(), Some(Ok(Token::KwImport)));
         lexer.next(); // skip ws
@@ -155,6 +156,12 @@ mod tests {
         assert_eq!(lexer.next(), Some(Ok(Token::KwMatch)));
         lexer.next(); // skip ws
         assert_eq!(lexer.next(), Some(Ok(Token::KwUnsafe)));
+        lexer.next(); // skip ws
+        assert_eq!(lexer.next(), Some(Ok(Token::TyArray)));
+        lexer.next(); // skip ws
+        assert_eq!(lexer.next(), Some(Ok(Token::TySlice)));
+        lexer.next(); // skip ws
+        assert_eq!(lexer.next(), Some(Ok(Token::KwWhere)));
     }
 
     #[test]

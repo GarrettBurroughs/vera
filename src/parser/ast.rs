@@ -46,6 +46,8 @@ ast_node!(TraitDecl, SyntaxKind::TRAIT_DECL);
 ast_node!(ImplDecl, SyntaxKind::IMPL_DECL);
 ast_node!(GenericParams, SyntaxKind::GENERIC_PARAMS);
 ast_node!(GenericArgs, SyntaxKind::GENERIC_ARGS);
+ast_node!(TypeAlias, SyntaxKind::TYPE_ALIAS);
+ast_node!(RefinementType, SyntaxKind::REFINEMENT_TYPE);
 
 // Statements
 ast_node!(ReturnStmt, SyntaxKind::RETURN_STMT);
@@ -204,6 +206,9 @@ impl SourceFile {
     pub fn impls(&self) -> impl Iterator<Item = ImplDecl> {
         self.syntax().children().filter_map(ImplDecl::cast)
     }
+    pub fn type_aliases(&self) -> impl Iterator<Item = TypeAlias> {
+        self.syntax().children().filter_map(TypeAlias::cast)
+    }
 }
 
 impl FuncDecl {
@@ -270,6 +275,10 @@ impl TypeRef {
     pub fn generic_args(&self) -> Option<GenericArgs> {
         self.syntax().children().find_map(GenericArgs::cast)
     }
+    
+    pub fn refinement(&self) -> Option<RefinementType> {
+        self.syntax().children().find_map(RefinementType::cast)
+    }
 }
 
 impl ArrayType {
@@ -314,6 +323,24 @@ impl PointerType {
     }
     pub fn is_mut(&self) -> bool {
         self.syntax().children_with_tokens().any(|t| t.kind() == SyntaxKind::KwMut)
+    }
+}
+
+impl RefinementType {
+    pub fn condition(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl TypeAlias {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+    pub fn where_expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
     }
 }
 
