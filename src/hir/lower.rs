@@ -48,6 +48,7 @@ struct Scope {
 pub struct LoweringContext {
     pub errors: Vec<SemanticError>,
     scopes: Vec<Scope>,
+    pub functions: BTreeMap<String, (Vec<(String, HirType)>, HirType)>, // name -> (params, ret_ty)
     current_func_ret_type: HirType,
 }
 
@@ -56,6 +57,7 @@ impl LoweringContext {
         Self {
             errors: Vec::new(),
             scopes: Vec::new(),
+            functions: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
         }
     }
@@ -84,6 +86,26 @@ impl LoweringContext {
     }
 
     pub fn lower_program(&mut self, source_file: &ast::SourceFile) -> HirProgram {
+        // Pass 1: Gather signatures
+        for func in source_file.functions() {
+            let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
+            let ret_type = match func.ret_type() {
+                Some(type_ref) => self.lower_type(&type_ref),
+                None => HirType::Void,
+            };
+            let mut params = Vec::new();
+            if let Some(param_list) = func.param_list() {
+                for param in param_list.params() {
+                    if let (Some(p_name), Some(p_ty_ref)) = (param.name(), param.ty()) {
+                        let p_ty = self.lower_type(&p_ty_ref);
+                        params.push((p_name, p_ty));
+                    }
+                }
+            }
+            self.functions.insert(name, (params, ret_type));
+        }
+
+        // Pass 2: Lower bodies
         let mut functions = Vec::new();
         for func in source_file.functions() {
             if let Some(f) = self.lower_func(&func) {
@@ -104,7 +126,7 @@ impl LoweringContext {
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
         
-        if let Some(spec) = func.spec_block() {
+        if let Some(spec) = func.spec() {
             for req in spec.requires_clauses() {
                 if let Some(e) = req.expr() {
                     requires.push(self.lower_expr(&e));
@@ -120,7 +142,13 @@ impl LoweringContext {
         self.enter_scope(); // Function scope
         self.current_func_ret_type = ret_type.clone();
 
-        // TODO: Lower params and insert them into scope
+        let mut params = Vec::new();
+        if let Some((sig_params, _)) = self.functions.get(&name) {
+            params = sig_params.clone();
+            for (p_name, p_ty) in &params {
+                self.declare_var(p_name.clone(), p_ty.clone(), false);
+            }
+        }
 
         let body = match func.body() {
             Some(block) => self.lower_block(&block),
@@ -132,6 +160,7 @@ impl LoweringContext {
 
         Some(HirFunc {
             name,
+            params,
             ret_type,
             body,
             requires,
@@ -252,6 +281,31 @@ impl LoweringContext {
                     HirExpr::VarRef(name, ty)
                 } else {
                     self.errors.push(SemanticError::UndefinedVariable { name: name.clone() });
+                    HirExpr::Error
+                }
+            }
+            ast::Expr::CallExpr(call_expr) => {
+                if let Some(ast::Expr::NameRef(name_ref)) = call_expr.callee() {
+                    let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
+                    let func_info = self.functions.get(&name).cloned();
+                    if let Some((sig_params, ret_ty)) = func_info {
+                        let mut args = Vec::new();
+                        if let Some(arg_list) = call_expr.arg_list() {
+                            for arg in arg_list.args() {
+                                args.push(self.lower_expr(&arg));
+                            }
+                        }
+                        if args.len() != sig_params.len() {
+                            // In a real compiler we'd report an arity error
+                            HirExpr::Error
+                        } else {
+                            HirExpr::Call(name, args, ret_ty.clone())
+                        }
+                    } else {
+                        self.errors.push(SemanticError::UndefinedVariable { name });
+                        HirExpr::Error
+                    }
+                } else {
                     HirExpr::Error
                 }
             }

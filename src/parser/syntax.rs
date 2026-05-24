@@ -40,6 +40,8 @@ pub enum SyntaxKind {
     CONDITION,
     NAME_REF,
     LITERAL,
+    CALL_EXPR,
+    ARG_LIST,
     SPEC_BLOCK,
     REQUIRES_CLAUSE,
     ENSURES_CLAUSE,

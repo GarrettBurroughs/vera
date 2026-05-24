@@ -1,0 +1,14 @@
+// run-pass
+// expect-exit-code: 120
+
+func factorial(n: i32): i32 {
+    if n <= 1 {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
+func main(): i32 {
+    return factorial(5);
+}

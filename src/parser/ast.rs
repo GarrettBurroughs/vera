@@ -50,6 +50,8 @@ ast_node!(IfExpr, SyntaxKind::IF_EXPR);
 ast_node!(NameRef, SyntaxKind::NAME_REF);
 ast_node!(Condition, SyntaxKind::CONDITION);
 ast_node!(Literal, SyntaxKind::LITERAL);
+ast_node!(CallExpr, SyntaxKind::CALL_EXPR);
+ast_node!(ArgList, SyntaxKind::ARG_LIST);
 
 ast_node!(SpecBlock, SyntaxKind::SPEC_BLOCK);
 ast_node!(RequiresClause, SyntaxKind::REQUIRES_CLAUSE);
@@ -88,6 +90,7 @@ pub enum Expr {
     IfExpr(IfExpr),
     NameRef(NameRef),
     Literal(Literal),
+    CallExpr(CallExpr),
 }
 
 impl Expr {
@@ -98,6 +101,7 @@ impl Expr {
             SyntaxKind::IF_EXPR => IfExpr::cast(node).map(Expr::IfExpr),
             SyntaxKind::NAME_REF => NameRef::cast(node).map(Expr::NameRef),
             SyntaxKind::LITERAL => Literal::cast(node).map(Expr::Literal),
+            SyntaxKind::CALL_EXPR => CallExpr::cast(node).map(Expr::CallExpr),
             _ => None,
         }
     }
@@ -122,17 +126,39 @@ impl FuncDecl {
     pub fn param_list(&self) -> Option<ParamList> {
         self.syntax().children().find_map(ParamList::cast)
     }
-
+    
     pub fn ret_type(&self) -> Option<TypeRef> {
         self.syntax().children().find_map(TypeRef::cast)
     }
-
+    
     pub fn body(&self) -> Option<BlockExpr> {
         self.syntax().children().find_map(BlockExpr::cast)
     }
-
-    pub fn spec_block(&self) -> Option<SpecBlock> {
+    
+    pub fn spec(&self) -> Option<SpecBlock> {
         self.syntax().children().find_map(SpecBlock::cast)
+    }
+}
+
+impl ParamList {
+    pub fn params(&self) -> impl Iterator<Item = Param> {
+        self.syntax().children().filter_map(Param::cast)
+    }
+}
+
+impl Param {
+    pub fn name(&self) -> Option<String> {
+        self.syntax().children_with_tokens().find_map(|it| {
+            if it.kind() == SyntaxKind::Ident {
+                Some(it.into_token()?.text().to_string())
+            } else {
+                None
+            }
+        })
+    }
+    
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
     }
 }
 
@@ -154,6 +180,28 @@ impl BlockExpr {
 }
 
 // Expr accessors
+impl Literal {
+    pub fn text(&self) -> String {
+        self.syntax().first_token().map(|t| t.text().to_string()).unwrap_or_default()
+    }
+}
+
+impl CallExpr {
+    pub fn callee(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    
+    pub fn arg_list(&self) -> Option<ArgList> {
+        self.syntax().children().find_map(ArgList::cast)
+    }
+}
+
+impl ArgList {
+    pub fn args(&self) -> impl Iterator<Item = Expr> {
+        self.syntax().children().filter_map(Expr::cast)
+    }
+}
+
 impl BinExpr {
     pub fn lhs(&self) -> Option<Expr> {
         self.syntax().children().filter_map(Expr::cast).next()
@@ -197,11 +245,15 @@ impl IfExpr {
         self.syntax().children().find_map(BlockExpr::cast)
     }
     pub fn else_branch(&self) -> Option<SyntaxNode> {
-        // Can be BlockExpr or IfExpr
-        self.syntax().children().find(|n| n.kind() == SyntaxKind::BLOCK_EXPR || n.kind() == SyntaxKind::IF_EXPR).filter(|n| {
-            // It has to be the SECOND one if it's a block
-            n != self.then_block().unwrap().syntax()
-        })
+        self.syntax().children()
+            .filter(|n| n.kind() == SyntaxKind::BLOCK_EXPR || n.kind() == SyntaxKind::IF_EXPR)
+            .find(|n| {
+                if let Some(tb) = self.then_block() {
+                    n != tb.syntax()
+                } else {
+                    true
+                }
+            })
     }
 }
 

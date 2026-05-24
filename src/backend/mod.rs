@@ -3,7 +3,7 @@ use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Tar
 use inkwell::OptimizationLevel;
 use inkwell::builder::Builder;
 use inkwell::module::Module;
-use inkwell::values::{PointerValue, BasicValueEnum, IntValue};
+use inkwell::values::{PointerValue, BasicValueEnum, IntValue, BasicMetadataValueEnum};
 use inkwell::types::BasicTypeEnum;
 use std::collections::BTreeMap;
 use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp};
@@ -16,25 +16,46 @@ struct CodeGen<'ctx> {
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    fn compile_func(&mut self, func: &HirFunc) -> Result<(), String> {
+    fn declare_func(&mut self, func: &HirFunc) -> Result<(), String> {
         let ret_type = match func.ret_type {
             HirType::I32 => self.context.i32_type().into(),
             HirType::Bool => self.context.bool_type().into(),
-            HirType::Void => self.context.i32_type().into(), // LLVM doesn't let us easily build_return void in inkwell if we don't handle it carefully, but let's assume functions return i32/bool for now.
+            HirType::Void => self.context.i32_type().into(),
             _ => return Err("Invalid return type".into()),
         };
 
-        // For simplicity, assuming all functions take 0 args right now
+        let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
+        for (_, ty) in &func.params {
+            let llvm_ty = match ty {
+                HirType::I32 => self.context.i32_type().into(),
+                HirType::Bool => self.context.bool_type().into(),
+                _ => return Err("Invalid param type".into()),
+            };
+            param_types.push(llvm_ty);
+        }
+
         let fn_type = match ret_type {
-            BasicTypeEnum::IntType(i) => i.fn_type(&[], false),
+            BasicTypeEnum::IntType(i) => i.fn_type(&param_types, false),
             _ => return Err("Unsupported return type".into()),
         };
 
-        let llvm_func = self.module.add_function(&func.name, fn_type, None);
+        self.module.add_function(&func.name, fn_type, None);
+        Ok(())
+    }
+
+    fn compile_func(&mut self, func: &HirFunc) -> Result<(), String> {
+        let llvm_func = self.module.get_function(&func.name).unwrap();
         let basic_block = self.context.append_basic_block(llvm_func, "entry");
         self.builder.position_at_end(basic_block);
 
-        self.variables.clear(); // Reset locals for new function
+        self.variables.clear();
+
+        for (i, (name, _ty)) in func.params.iter().enumerate() {
+            let param_val = llvm_func.get_nth_param(i as u32).unwrap();
+            let alloca = self.builder.build_alloca(param_val.get_type(), name).unwrap();
+            self.builder.build_store(alloca, param_val).unwrap();
+            self.variables.insert(name.clone(), alloca);
+        }
 
         self.compile_block(&func.body)?;
 
@@ -42,8 +63,9 @@ impl<'ctx> CodeGen<'ctx> {
         // We really should check if the last instruction was a terminator.
         let block = self.builder.get_insert_block().unwrap();
         if block.get_terminator().is_none() {
-            let default_val = match ret_type {
-                BasicTypeEnum::IntType(i) => i.const_zero(),
+            let default_val = match func.ret_type {
+                HirType::I32 => self.context.i32_type().const_zero(),
+                HirType::Bool => self.context.i32_type().const_zero(), // IntType inside
                 _ => self.context.i32_type().const_zero(),
             };
             self.builder.build_return(Some(&default_val)).unwrap();
@@ -193,6 +215,18 @@ impl<'ctx> CodeGen<'ctx> {
                 // Return dummy value since we're using Void return for `if` statements right now.
                 Ok(self.context.i32_type().const_zero().into())
             }
+            HirExpr::Call(name, args, _) => {
+                let llvm_func = self.module.get_function(name).ok_or(format!("Function {} not found", name))?;
+                let mut llvm_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+                for arg in args {
+                    llvm_args.push(self.compile_expr(arg)?.into());
+                }
+                let call_site = self.builder.build_call(llvm_func, &llvm_args, "tmpcall").unwrap();
+                match call_site.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(val) => Ok(val),
+                    inkwell::values::ValueKind::Instruction(_) => Err("Call returned void".into()),
+                }
+            }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
     }
@@ -211,7 +245,15 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
     };
     
     for func in &hir.functions {
+        codegen.declare_func(func)?;
+    }
+    
+    for func in &hir.functions {
         codegen.compile_func(func)?;
+    }
+
+    if std::env::var("PRINT_IR").is_ok() {
+        println!("{}", codegen.module.print_to_string().to_string());
     }
     
     Target::initialize_all(&InitializationConfig::default());

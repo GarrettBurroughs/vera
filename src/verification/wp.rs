@@ -72,6 +72,15 @@ fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
         HirExpr::IntLiteral(v, _) => SmtExpr::IntConst(*v),
         HirExpr::BoolLiteral(v, _) => SmtExpr::BoolConst(*v),
         HirExpr::VarRef(name, _) => SmtExpr::Var(name.clone()),
+        HirExpr::Call(name, _, ty) => {
+            // For Phase 5, we treat function calls as opaque values in WP.
+            // In the future, we will use uninterpreted functions or inline contracts.
+            if ty == &HirType::I32 {
+                SmtExpr::Var(format!("__call_{}", name)) // Treat as an arbitrary variable
+            } else {
+                SmtExpr::BoolConst(false)
+            }
+        }
         HirExpr::BinaryOp(op, lhs, rhs, _) => {
             let lhs_smt = Box::new(hir_to_smt(lhs));
             let rhs_smt = Box::new(hir_to_smt(rhs));

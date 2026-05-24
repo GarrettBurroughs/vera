@@ -138,6 +138,25 @@ impl<'a> Parser<'a> {
         self.expect(SyntaxKind::KwFunc);
         self.expect(SyntaxKind::Ident);
         self.expect(SyntaxKind::LParen);
+        
+        if !self.at(SyntaxKind::RParen) {
+            self.start_node(SyntaxKind::PARAM_LIST);
+            loop {
+                self.start_node(SyntaxKind::PARAM);
+                self.expect(SyntaxKind::Ident);
+                self.expect(SyntaxKind::Colon);
+                self.parse_type();
+                self.finish_node();
+                
+                if self.at(SyntaxKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.finish_node();
+        }
+        
         self.expect(SyntaxKind::RParen);
         
         if self.at(SyntaxKind::Colon) {
@@ -380,8 +399,26 @@ impl<'a> Parser<'a> {
     }
     
     fn parse_postfix_expr(&mut self) {
-        // Simplified for Phase 3.5: No method calls or array indexing yet
+        let mut m = self.start();
         self.parse_primary_expr();
+        while self.at(SyntaxKind::LParen) {
+            self.start_node(SyntaxKind::ARG_LIST);
+            self.advance(); // consume LParen
+            if !self.at(SyntaxKind::RParen) {
+                loop {
+                    self.parse_expr();
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(SyntaxKind::RParen);
+            self.finish_node(); // finish ARG_LIST
+            let comp = self.complete(m, SyntaxKind::CALL_EXPR);
+            m = self.precede(comp);
+        }
     }
     
     fn parse_primary_expr(&mut self) {

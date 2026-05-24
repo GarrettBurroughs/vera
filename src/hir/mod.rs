@@ -14,6 +14,7 @@ pub struct HirProgram {
 #[derive(Debug, Clone)]
 pub struct HirFunc {
     pub name: String,
+    pub params: Vec<(String, HirType)>,
     pub ret_type: HirType,
     pub body: HirBlock,
     pub requires: Vec<HirExpr>,
@@ -54,6 +55,7 @@ pub enum HirExpr {
     BinaryOp(BinaryOp, Box<HirExpr>, Box<HirExpr>, HirType),
     UnaryOp(UnaryOp, Box<HirExpr>, HirType),
     VarRef(String, HirType),
+    Call(String, Vec<HirExpr>, HirType),
     If(Box<HirExpr>, HirBlock, Option<HirBlock>, HirType),
     Error,
 }
@@ -66,6 +68,7 @@ impl HirExpr {
             HirExpr::BinaryOp(_, _, _, ty) => ty.clone(),
             HirExpr::UnaryOp(_, _, ty) => ty.clone(),
             HirExpr::VarRef(_, ty) => ty.clone(),
+            HirExpr::Call(_, _, ty) => ty.clone(),
             HirExpr::If(_, _, _, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
