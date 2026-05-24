@@ -82,7 +82,7 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
                 }
             wp_eval_expr(expr, "__dummy_expr", post, ensures_wp)
         }
-        HirStmt::While(cond, body, invariants, _decreases) => {
+        HirStmt::While(cond, body, invariants, decreases) => {
             let mut i_expr = SmtExpr::BoolConst(true);
             for inv in invariants {
                 i_expr = SmtExpr::And(Box::new(i_expr), Box::new(hir_to_smt(inv)));
@@ -97,8 +97,27 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
             
             // compute_block_wp backwards
             let mut body_wp = i_expr.clone();
+            
+            if let Some(dec) = decreases {
+                let d_expr = hir_to_smt(dec);
+                let d0_var = SmtExpr::Var("___d0".into());
+                let dec_cond = SmtExpr::FuncCall("<".into(), vec![d_expr.clone(), d0_var.clone()]);
+                body_wp = SmtExpr::And(Box::new(body_wp), Box::new(dec_cond));
+            }
+            
             for s in body.statements.iter().rev() {
                 body_wp = compute_wp(s, body_wp, ensures_wp);
+            }
+            
+            if let Some(dec) = decreases {
+                let d_expr = hir_to_smt(dec);
+                let d0_eq = SmtExpr::FuncCall("=".into(), vec![SmtExpr::Var("___d0".into()), d_expr.clone()]);
+                let d_pos = SmtExpr::FuncCall(">=".into(), vec![d_expr.clone(), SmtExpr::IntConst(0)]);
+                
+                body_wp = SmtExpr::And(
+                    Box::new(d_pos),
+                    Box::new(SmtExpr::Forall("___d0".into(), Box::new(SmtExpr::Implies(Box::new(d0_eq), Box::new(body_wp)))))
+                );
             }
             
             let preservation = SmtExpr::Implies(Box::new(b_expr.clone()), Box::new(body_wp));

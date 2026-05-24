@@ -462,11 +462,17 @@ impl LoweringContext {
                     requires.push(self.lower_expr(&e));
                 }
             }
+            
+            self.enter_scope();
+            if ret_type != HirType::Void {
+                self.declare_var("result".to_string(), ret_type.clone(), true);
+            }
             for ens in spec.ensures_clauses() {
                 if let Some(e) = ens.expr() {
                     ensures.push(self.lower_expr(&e));
                 }
             }
+            self.exit_scope();
         }
 
         let body = match func.body() {

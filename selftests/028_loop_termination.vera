@@ -1,0 +1,28 @@
+// run-pass
+// Test loop termination with decreases clause
+
+func sum(n: i32): i32 
+spec {
+    requires n >= 0;
+    ensures result >= 0;
+} {
+    var i: i32 = 0;
+    var s: i32 = 0;
+    
+    while i < n spec {
+        invariant i >= 0;
+        invariant i <= n;
+        invariant s >= 0;
+        decreases n - i;
+    } {
+        s = s + i;
+        i = i + 1;
+    }
+    
+    return s;
+}
+
+func main(): i32 {
+    sum(10);
+    return 0;
+}

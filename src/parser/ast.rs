@@ -412,7 +412,7 @@ impl PrefixExpr {
 
 impl NameRef {
     pub fn ident(&self) -> Option<SyntaxToken> {
-        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident || it.kind() == SyntaxKind::TyResult)
     }
 }
 
