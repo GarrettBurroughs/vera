@@ -11,6 +11,7 @@ pub enum HirType {
     Result(Box<HirType>, Box<HirType>),
     Ptr(Box<HirType>, bool), // (type, is_mut)
     Ref(Box<HirType>, bool), // (type, is_mut)
+    Func(Vec<HirType>, Box<HirType>), // (param_types, ret_type)
     Error,
 }
 
@@ -71,6 +72,7 @@ pub enum HirExpr {
     UnaryOp(UnaryOp, Box<HirExpr>, HirType),
     VarRef(String, HirType),
     Call(String, Vec<HirExpr>, HirType),
+    CallIndirect(Box<HirExpr>, Vec<HirExpr>, HirType), // callee, args, type
     If(Box<HirExpr>, HirBlock, Option<HirBlock>, HirType),
     StructExpr(String, Vec<(String, HirExpr)>, HirType),
     FieldAccess(Box<HirExpr>, String, HirType),
@@ -86,6 +88,7 @@ pub enum HirExpr {
     Ref(Box<HirExpr>, bool, HirType), // inner expr, is_mut, result type
     Deref(Box<HirExpr>, HirType), // inner expr, result type
     Block(HirBlock, HirType),
+    Closure(Vec<String>, Box<HirExpr>, Vec<String>, HirType), // params, body, captures, type
     Error,
 }
 
@@ -98,6 +101,7 @@ impl HirExpr {
             HirExpr::UnaryOp(_, _, ty) => ty.clone(),
             HirExpr::VarRef(_, ty) => ty.clone(),
             HirExpr::Call(_, _, ty) => ty.clone(),
+            HirExpr::CallIndirect(_, _, ty) => ty.clone(),
             HirExpr::If(_, _, _, ty) => ty.clone(),
             HirExpr::StructExpr(_, _, ty) => ty.clone(),
             HirExpr::FieldAccess(_, _, ty) => ty.clone(),
@@ -113,6 +117,7 @@ impl HirExpr {
             HirExpr::Ref(_, _, ty) => ty.clone(),
             HirExpr::Deref(_, ty) => ty.clone(),
             HirExpr::Block(_, ty) => ty.clone(),
+            HirExpr::Closure(_, _, _, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
     }

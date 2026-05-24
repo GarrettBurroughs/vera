@@ -101,6 +101,7 @@ pub enum Token {
     #[token("[")] LBracket,
     #[token("]")] RBracket,
     #[token("|")] Pipe,
+    #[token("->")] Arrow,
     #[token("@")] At,
 
     // Literals and Identifiers

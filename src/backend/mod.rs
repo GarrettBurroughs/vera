@@ -3,8 +3,8 @@ use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Tar
 use inkwell::OptimizationLevel;
 use inkwell::builder::Builder;
 use inkwell::module::Module;
-use inkwell::values::{PointerValue, BasicValueEnum, IntValue, BasicMetadataValueEnum};
-use inkwell::types::BasicTypeEnum;
+use inkwell::values::{PointerValue, BasicValueEnum, IntValue, BasicMetadataValueEnum, ValueKind};
+use inkwell::types::{BasicTypeEnum, BasicType};
 use std::collections::BTreeMap;
 use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
 
@@ -68,8 +68,11 @@ impl<'ctx> CodeGen<'ctx> {
                 let err_llvm = self.lower_type(err_ty)?;
                 Ok(self.context.struct_type(&[tag_ty.into(), ok_llvm.into(), err_llvm.into()], false).into())
             }
+            HirType::Func(_, _) => {
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(self.context.struct_type(&[ptr_ty.into(), ptr_ty.into()], false).into())
+            }
             HirType::Error => Err("Cannot lower error type".into()),
-            _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
         }
     }
 
@@ -481,7 +484,30 @@ impl<'ctx> CodeGen<'ctx> {
                 let call_site = self.builder.build_call(llvm_func, &llvm_args, "tmpcall").unwrap();
                 match call_site.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(val) => Ok(val),
-                    inkwell::values::ValueKind::Instruction(_) => Err("Call returned void".into()),
+                    inkwell::values::ValueKind::Instruction(_) => Ok(self.context.i32_type().const_zero().into()),
+                }
+            }
+            HirExpr::CallIndirect(callee, args, ty) => {
+                let callee_val = self.compile_expr(callee)?.into_struct_value();
+                let fn_ptr = self.builder.build_extract_value(callee_val, 0, "fn_ptr").unwrap().into_pointer_value();
+                let env_ptr = self.builder.build_extract_value(callee_val, 1, "env_ptr").unwrap().into_pointer_value();
+                
+                let mut llvm_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![env_ptr.into()];
+                let mut llvm_arg_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![self.context.ptr_type(inkwell::AddressSpace::default()).into()];
+                
+                for arg in args {
+                    let arg_val = self.compile_expr(arg)?;
+                    llvm_args.push(arg_val.into());
+                    llvm_arg_types.push(arg_val.get_type().into());
+                }
+                
+                let ret_ty_llvm = self.lower_type(ty)?;
+                let fn_type = ret_ty_llvm.fn_type(&llvm_arg_types, false);
+                
+                let call_site = self.builder.build_indirect_call(fn_type, fn_ptr, &llvm_args, "icall_tmp").unwrap();
+                match call_site.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(val) => Ok(val),
+                    inkwell::values::ValueKind::Instruction(_) => Ok(self.context.i32_type().const_zero().into()),
                 }
             }
             HirExpr::StructExpr(name, fields, _) => {
@@ -755,6 +781,78 @@ impl<'ctx> CodeGen<'ctx> {
                     Ok(val)
                 } else {
                     Ok(self.context.i32_type().const_zero().into()) // dummy void
+                }
+            }
+            HirExpr::Closure(params, body, captures, ty) => {
+                let mut env_types = Vec::new();
+                let mut cap_tys = Vec::new();
+                for cap in captures {
+                    if let Some((_, t)) = self.lookup_var(cap) {
+                        env_types.push(self.lower_type(&t)?);
+                        cap_tys.push(t.clone());
+                    }
+                }
+                
+                let env_struct_ty = self.context.struct_type(&env_types, false);
+                let env_ptr = self.builder.build_alloca(env_struct_ty, "env").unwrap();
+                
+                for (i, cap) in captures.iter().enumerate() {
+                    if let Some((ptr, _)) = self.lookup_var(cap) {
+                        let val = self.builder.build_load(env_types[i], ptr, cap).unwrap();
+                        let field_ptr = self.builder.build_struct_gep(env_struct_ty, env_ptr, i as u32, "env_field").unwrap();
+                        self.builder.build_store(field_ptr, val).unwrap();
+                    }
+                }
+                
+                if let HirType::Func(ptys, ret) = ty {
+                    let mut fn_param_tys: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![self.context.ptr_type(inkwell::AddressSpace::default()).into()]; // env ptr
+                    for pty in ptys {
+                        fn_param_tys.push(self.lower_type(pty)?.into());
+                    }
+                    let ret_llvm = self.lower_type(ret)?;
+                    let fn_type = ret_llvm.fn_type(&fn_param_tys, false);
+                    
+                    let fn_val = self.module.add_function("closure_fn", fn_type, None);
+                    let current_bb = self.builder.get_insert_block().unwrap();
+                    let basic_block = self.context.append_basic_block(fn_val, "entry");
+                    self.builder.position_at_end(basic_block);
+                    
+                    self.enter_scope();
+                    
+                    let fn_env_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+                    for (i, cap) in captures.iter().enumerate() {
+                        let field_ptr = self.builder.build_struct_gep(env_struct_ty, fn_env_ptr, i as u32, "env_field").unwrap();
+                        let local_ptr = self.builder.build_alloca(env_types[i], cap).unwrap();
+                        let val = self.builder.build_load(env_types[i], field_ptr, cap).unwrap();
+                        self.builder.build_store(local_ptr, val).unwrap();
+                        self.declare_var(cap.clone(), local_ptr, cap_tys[i].clone());
+                    }
+                    
+                    for (i, param) in params.iter().enumerate() {
+                        let param_val = fn_val.get_nth_param((i + 1) as u32).unwrap();
+                        let param_llvm_ty = fn_param_tys[i + 1];
+                        let local_ptr = self.builder.build_alloca(BasicTypeEnum::try_from(param_llvm_ty).unwrap(), param).unwrap();
+                        self.builder.build_store(local_ptr, param_val).unwrap();
+                        self.declare_var(param.clone(), local_ptr, ptys[i].clone());
+                    }
+                    
+                    let body_val = self.compile_expr(body)?;
+                    self.builder.build_return(Some(&body_val)).unwrap();
+                    
+                    self.exit_scope();
+                    self.builder.position_at_end(current_bb);
+                    
+                    let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                    let fat_ptr_ty = self.context.struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+                    let fat_ptr = fat_ptr_ty.const_zero();
+                    
+                    let fn_ptr_val = fn_val.as_global_value().as_pointer_value();
+                    let fat_ptr_1 = self.builder.build_insert_value(fat_ptr, fn_ptr_val, 0, "fat_fn").unwrap().into_struct_value();
+                    let fat_ptr_2 = self.builder.build_insert_value(fat_ptr_1, env_ptr, 1, "fat_env").unwrap().into_struct_value();
+                    
+                    Ok(fat_ptr_2.into())
+                } else {
+                    Err("Closure must have Func type".into())
                 }
             }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),

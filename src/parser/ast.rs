@@ -57,6 +57,7 @@ ast_node!(SliceType, SyntaxKind::SLICE_TYPE);
 ast_node!(ResultType, SyntaxKind::RESULT_TYPE);
 ast_node!(PointerType, SyntaxKind::POINTER_TYPE);
 ast_node!(RefType, SyntaxKind::REF_TYPE);
+ast_node!(FuncType, SyntaxKind::FUNC_TYPE);
 ast_node!(BinExpr, SyntaxKind::BIN_EXPR);
 ast_node!(PrefixExpr, SyntaxKind::PREFIX_EXPR);
 ast_node!(IfExpr, SyntaxKind::IF_EXPR);
@@ -69,6 +70,7 @@ ast_node!(TryExpr, SyntaxKind::TRY_EXPR);
 ast_node!(RefExpr, SyntaxKind::REF_EXPR);
 ast_node!(DerefExpr, SyntaxKind::DEREF_EXPR);
 ast_node!(UnsafeBlock, SyntaxKind::UNSAFE_BLOCK);
+ast_node!(ClosureExpr, SyntaxKind::CLOSURE_EXPR);
 
 ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
 ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
@@ -146,6 +148,7 @@ pub enum Expr {
     RefExpr(RefExpr),
     DerefExpr(DerefExpr),
     UnsafeBlock(UnsafeBlock),
+    ClosureExpr(ClosureExpr),
 }
 
 impl Expr {
@@ -167,6 +170,7 @@ impl Expr {
             SyntaxKind::REF_EXPR => RefExpr::cast(node).map(Expr::RefExpr),
             SyntaxKind::DEREF_EXPR => DerefExpr::cast(node).map(Expr::DerefExpr),
             SyntaxKind::UNSAFE_BLOCK => UnsafeBlock::cast(node).map(Expr::UnsafeBlock),
+            SyntaxKind::CLOSURE_EXPR => ClosureExpr::cast(node).map(Expr::ClosureExpr),
             _ => None,
         }
     }
@@ -682,5 +686,20 @@ impl MatchArm {
 impl Pattern {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+}
+
+impl ClosureExpr {
+    pub fn params(&self) -> impl Iterator<Item = Param> {
+        self.syntax().children().filter_map(Param::cast)
+    }
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl FuncType {
+    pub fn types(&self) -> Vec<TypeRef> {
+        self.syntax().children().filter_map(TypeRef::cast).collect()
     }
 }

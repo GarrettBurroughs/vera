@@ -268,6 +268,26 @@ impl LoweringContext {
             return HirType::Ptr(Box::new(inner_ty), is_mut);
         }
 
+        if let Some(f) = type_ref.syntax().children().find_map(ast::FuncType::cast) {
+            let types = f.types();
+            let has_arrow = f.syntax().children_with_tokens().any(|it| it.kind() == crate::parser::syntax::SyntaxKind::Arrow);
+            
+            let mut param_tys = Vec::new();
+            let ret_ty;
+            if has_arrow && !types.is_empty() {
+                for t in types.iter().take(types.len() - 1) {
+                    param_tys.push(self.lower_type(t));
+                }
+                ret_ty = self.lower_type(types.last().unwrap());
+            } else {
+                for t in types {
+                    param_tys.push(self.lower_type(&t));
+                }
+                ret_ty = HirType::Void;
+            }
+            return HirType::Func(param_tys, Box::new(ret_ty));
+        }
+
         let name = type_ref.as_string().unwrap_or_default();
         match name.as_str() {
             "i32" => HirType::I32,
@@ -545,33 +565,58 @@ impl LoweringContext {
                         self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", case_name, variant_name) });
                         HirExpr::Error
                     }
-                } else if let Some(ast::Expr::NameRef(name_ref)) = call_expr.callee() {
-                    let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                    if name == "Ok" {
-                        let arg = call_expr.arg_list().and_then(|l| l.args().next()).map(|a| self.lower_expr(&a)).unwrap_or(HirExpr::Error);
-                        HirExpr::ResultOk(Box::new(arg), self.current_func_ret_type.clone())
-                    } else if name == "Err" {
-                        let arg = call_expr.arg_list().and_then(|l| l.args().next()).map(|a| self.lower_expr(&a)).unwrap_or(HirExpr::Error);
-                        HirExpr::ResultErr(Box::new(arg), self.current_func_ret_type.clone())
-                    } else {
-                        let func_info = self.functions.get(&name).cloned();
-                    if let Some((sig_params, ret_ty)) = func_info {
-                        let mut args = Vec::new();
-                        if let Some(arg_list) = call_expr.arg_list() {
-                            for arg in arg_list.args() {
-                                args.push(self.lower_expr(&arg));
+                } else if let Some(callee_ast) = call_expr.callee() {
+                    let mut is_direct = false;
+                    let mut direct_name = String::new();
+                    if let ast::Expr::NameRef(name_ref) = &callee_ast {
+                        let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
+                        if name == "Ok" || name == "Err" {
+                            is_direct = true;
+                            direct_name = name.clone();
+                        } else if self.functions.contains_key(&name) {
+                            is_direct = true;
+                            direct_name = name.clone();
+                        }
+                    }
+                    
+                    let mut args = Vec::new();
+                    if let Some(arg_list) = call_expr.arg_list() {
+                        for arg in arg_list.args() {
+                            args.push(self.lower_expr(&arg));
+                        }
+                    }
+                    
+                    if is_direct {
+                        if direct_name == "Ok" {
+                            let arg = args.into_iter().next().unwrap_or(HirExpr::Error);
+                            HirExpr::ResultOk(Box::new(arg), self.current_func_ret_type.clone())
+                        } else if direct_name == "Err" {
+                            let arg = args.into_iter().next().unwrap_or(HirExpr::Error);
+                            HirExpr::ResultErr(Box::new(arg), self.current_func_ret_type.clone())
+                        } else {
+                            let func_info = self.functions.get(&direct_name).cloned().unwrap();
+                            if args.len() != func_info.0.len() {
+                                self.errors.push(SemanticError::Custom(format!("arity mismatch for {}", direct_name)));
+                                HirExpr::Error
+                            } else {
+                                HirExpr::Call(direct_name, args, func_info.1.clone())
                             }
                         }
-                        if args.len() != sig_params.len() {
-                            // In a real compiler we'd report an arity error
+                    } else {
+                        let callee = self.lower_expr(&callee_ast);
+                        if let HirType::Func(param_tys, ret_ty) = callee.ty() {
+                            if args.len() != param_tys.len() {
+                                self.errors.push(SemanticError::Custom("arity mismatch for indirect call".to_string()));
+                                HirExpr::Error
+                            } else {
+                                HirExpr::CallIndirect(Box::new(callee), args, *ret_ty)
+                            }
+                        } else if callee.ty() != HirType::Error {
+                            self.errors.push(SemanticError::Custom("expected function type".to_string()));
                             HirExpr::Error
                         } else {
-                            HirExpr::Call(name, args, ret_ty.clone())
+                            HirExpr::Error
                         }
-                    } else {
-                        self.errors.push(SemanticError::UndefinedVariable { name });
-                        HirExpr::Error
-                    }
                     }
                 } else {
                     HirExpr::Error
@@ -924,6 +969,37 @@ impl LoweringContext {
                 self.in_unsafe_block = prev;
                 HirExpr::Block(block, ty)
             }
+            ast::Expr::ClosureExpr(closure) => {
+                let mut params = Vec::new();
+                let mut param_tys = Vec::new();
+                for p in closure.params() {
+                    let name = p.name().unwrap_or_default();
+                    let ty = p.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error); // Closures require type annotations for now
+                    params.push(name);
+                    param_tys.push(ty);
+                }
+                
+                self.enter_scope();
+                for (name, ty) in params.iter().zip(param_tys.iter()) {
+                    self.declare_var(name.clone(), ty.clone(), false);
+                }
+                
+                let body = closure.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let ret_ty = body.ty();
+                
+                self.exit_scope();
+                
+                let mut captures = std::collections::HashSet::new();
+                let mut bound = std::collections::HashSet::new();
+                for p in &params {
+                    bound.insert(p.clone());
+                }
+                get_captures(&body, &mut bound, &mut captures);
+                let captured_vars: Vec<String> = captures.into_iter().collect();
+                
+                let closure_ty = HirType::Func(param_tys, Box::new(ret_ty));
+                HirExpr::Closure(params, Box::new(body), captured_vars, closure_ty)
+            }
         }
     }
 
@@ -971,6 +1047,114 @@ impl LoweringContext {
         };
 
         HirExpr::If(Box::new(cond), then_block, else_block, HirType::Void)
+    }
+}
+
+fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, captures: &mut std::collections::HashSet<String>) {
+    match expr {
+        HirExpr::VarRef(name, _) => {
+            if !bound.contains(name) {
+                captures.insert(name.clone());
+            }
+        }
+        HirExpr::BinaryOp(_, lhs, rhs, _) => {
+            get_captures(lhs, bound, captures);
+            get_captures(rhs, bound, captures);
+        }
+        HirExpr::UnaryOp(_, inner, _) | HirExpr::Ref(inner, _, _) | HirExpr::Deref(inner, _) | HirExpr::Try(inner, _)
+        | HirExpr::ResultOk(inner, _) | HirExpr::ResultErr(inner, _) | HirExpr::FieldAccess(inner, _, _) => {
+            get_captures(inner, bound, captures);
+        }
+        HirExpr::Call(_, args, _) | HirExpr::VariantConstructor(_, _, args, _) | HirExpr::ArrayExpr(args, _) => {
+            for arg in args {
+                get_captures(arg, bound, captures);
+            }
+        }
+        HirExpr::CallIndirect(callee, args, _) => {
+            get_captures(callee, bound, captures);
+            for arg in args {
+                get_captures(arg, bound, captures);
+            }
+        }
+        HirExpr::If(cond, then_b, else_b, _) => {
+            get_captures(cond, bound, captures);
+            get_captures_block(then_b, bound, captures);
+            if let Some(b) = else_b {
+                get_captures_block(b, bound, captures);
+            }
+        }
+        HirExpr::StructExpr(_, fields, _) => {
+            for (_, e) in fields {
+                get_captures(e, bound, captures);
+            }
+        }
+        HirExpr::IndexExpr(base, idx, _) => {
+            get_captures(base, bound, captures);
+            get_captures(idx, bound, captures);
+        }
+        HirExpr::SliceExpr(base, start, end, _) => {
+            get_captures(base, bound, captures);
+            get_captures(start, bound, captures);
+            get_captures(end, bound, captures);
+        }
+        HirExpr::Match(cond, arms, _) => {
+            get_captures(cond, bound, captures);
+            for (pat, e) in arms {
+                let mut new_bound = bound.clone();
+                // add pattern bindings
+                match pat {
+                    HirPattern::VariantCase(_, bindings) => {
+                        for b in bindings {
+                            new_bound.insert(b.clone());
+                        }
+                    }
+                    HirPattern::Binding(b) => {
+                        new_bound.insert(b.clone());
+                    }
+                    HirPattern::Literal(_) | HirPattern::Wildcard => {}
+                }
+                get_captures(e, &mut new_bound, captures);
+            }
+        }
+        HirExpr::Block(block, _) => {
+            get_captures_block(block, bound, captures);
+        }
+        HirExpr::Closure(params, body, _, _) => {
+            let mut new_bound = bound.clone();
+            for p in params {
+                new_bound.insert(p.clone());
+            }
+            get_captures(body, &mut new_bound, captures);
+        }
+        HirExpr::IntLiteral(_, _) | HirExpr::BoolLiteral(_, _) | HirExpr::EnumVariant(_, _, _, _) | HirExpr::Error => {}
+    }
+}
+
+fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<String>, captures: &mut std::collections::HashSet<String>) {
+    let mut new_bound = bound.clone();
+    for stmt in &block.statements {
+        match stmt {
+            HirStmt::Let(name, _, _, init) => {
+                get_captures(init, &mut new_bound, captures);
+                new_bound.insert(name.clone());
+            }
+            HirStmt::Expr(e) | HirStmt::Assert(e) | HirStmt::Assume(e) => get_captures(e, &mut new_bound, captures),
+            HirStmt::Return(Some(e)) => get_captures(e, &mut new_bound, captures),
+            HirStmt::Return(None) | HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
+            HirStmt::While(cond, body, invs) => {
+                get_captures(cond, &mut new_bound, captures);
+                for inv in invs {
+                    get_captures(inv, &mut new_bound, captures);
+                }
+                get_captures_block(body, &mut new_bound, captures);
+            }
+            HirStmt::For(name, iter, body) => {
+                get_captures(iter, &mut new_bound, captures);
+                let mut b2 = new_bound.clone();
+                b2.insert(name.clone());
+                get_captures_block(body, &mut b2, captures);
+            }
+        }
     }
 }
 

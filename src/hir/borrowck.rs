@@ -129,6 +129,12 @@ impl BorrowChecker {
                     self.check_expr(arg, ctx);
                 }
             }
+            HirExpr::CallIndirect(callee, args, _) => {
+                self.check_expr(callee, ctx);
+                for arg in args {
+                    self.check_expr(arg, ctx);
+                }
+            }
             HirExpr::If(cond, then_b, else_b, _) => {
                 self.check_expr(cond, ctx);
                 self.check_block(then_b, ctx);
@@ -161,6 +167,9 @@ impl BorrowChecker {
             }
             HirExpr::Block(block, _) => {
                 self.check_block(block, ctx);
+            }
+            HirExpr::Closure(_, body, _, _) => {
+                self.check_expr(body, ctx);
             }
             HirExpr::IntLiteral(_, _) | HirExpr::BoolLiteral(_, _) | HirExpr::EnumVariant(_, _, _, _) | HirExpr::Error => {}
         }

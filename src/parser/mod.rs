@@ -269,6 +269,24 @@ impl<'a> Parser<'a> {
             self.parse_type();
             self.expect(SyntaxKind::RBracket);
             self.finish_node();
+        } else if self.at(SyntaxKind::KwFunc) {
+            self.start_node(SyntaxKind::FUNC_TYPE);
+            self.advance(); // func
+            self.expect(SyntaxKind::LParen);
+            while !self.at(SyntaxKind::RParen) && self.cursor < self.tokens.len() {
+                self.parse_type();
+                if self.at(SyntaxKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(SyntaxKind::RParen);
+            if self.at(SyntaxKind::Arrow) {
+                self.advance();
+                self.parse_type(); // Return type
+            }
+            self.finish_node();
         } else if self.at(SyntaxKind::TyI32) || self.at(SyntaxKind::TyBool) || self.at(SyntaxKind::Ident)
             || self.at(SyntaxKind::TyU64) || self.at(SyntaxKind::TyF32) || self.at(SyntaxKind::TyF64)
             || self.at(SyntaxKind::TyU32) || self.at(SyntaxKind::TyI64) || self.at(SyntaxKind::TyI16)
@@ -747,6 +765,31 @@ impl<'a> Parser<'a> {
             } else {
                 self.error("Expected '{' after 'unsafe'");
             }
+            self.finish_node();
+        } else if self.at(SyntaxKind::Pipe) || self.at(SyntaxKind::PipePipe) {
+            self.start_node(SyntaxKind::CLOSURE_EXPR);
+            if self.at(SyntaxKind::PipePipe) {
+                self.advance();
+            } else {
+                self.advance(); // |
+                while !self.at(SyntaxKind::Pipe) && self.cursor < self.tokens.len() {
+                    self.start_node(SyntaxKind::PARAM);
+                    self.expect(SyntaxKind::Ident);
+                    if self.at(SyntaxKind::Colon) {
+                        self.advance();
+                        self.parse_type();
+                    }
+                    self.finish_node(); // PARAM
+                    
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(SyntaxKind::Pipe);
+            }
+            self.parse_expr(); // body
             self.finish_node();
         } else {
             self.error("Expected expression");
