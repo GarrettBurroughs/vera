@@ -14,6 +14,7 @@ pub struct Parser<'a> {
     tokens: Vec<(SyntaxKind, &'a str)>,
     cursor: usize,
     events: Vec<Event>,
+    forbid_struct_expr: bool,
 }
     
 pub struct Marker(usize);
@@ -36,6 +37,7 @@ impl<'a> Parser<'a> {
             tokens,
             cursor: 0,
             events: Vec::new(),
+            forbid_struct_expr: false,
         }
     }
     
@@ -294,7 +296,10 @@ impl<'a> Parser<'a> {
     fn parse_while_stmt(&mut self) {
         self.start_node(SyntaxKind::WHILE_STMT);
         self.expect(SyntaxKind::KwWhile);
+        let old = self.forbid_struct_expr;
+        self.forbid_struct_expr = true;
         self.parse_expr();
+        self.forbid_struct_expr = old;
         if self.at(SyntaxKind::KwSpec) {
             self.parse_spec_block();
         }
@@ -368,7 +373,10 @@ impl<'a> Parser<'a> {
         self.expect(SyntaxKind::KwIf);
         
         self.start_node(SyntaxKind::CONDITION);
+        let old = self.forbid_struct_expr;
+        self.forbid_struct_expr = true;
         self.parse_expr();
+        self.forbid_struct_expr = old;
         self.finish_node();
         
         if self.at(SyntaxKind::LBrace) {
@@ -548,7 +556,7 @@ impl<'a> Parser<'a> {
                 peek += 1;
             }
             
-            if peek < self.tokens.len() && self.tokens[peek].0 == SyntaxKind::LBrace {
+            if !self.forbid_struct_expr && peek < self.tokens.len() && self.tokens[peek].0 == SyntaxKind::LBrace {
                 self.start_node(SyntaxKind::STRUCT_EXPR);
                 self.start_node(SyntaxKind::NAME_REF);
                 self.advance(); // Ident
@@ -587,10 +595,71 @@ impl<'a> Parser<'a> {
             self.expect(SyntaxKind::RParen);
         } else if self.at(SyntaxKind::KwIf) {
             self.parse_if_expr();
+        } else if self.at(SyntaxKind::KwMatch) {
+            self.parse_match_expr();
         } else {
             self.error("Expected expression");
             self.advance(); // Prevent infinite loop
         }
+    }
+
+    fn parse_match_expr(&mut self) {
+        self.start_node(SyntaxKind::MATCH_EXPR);
+        self.expect(SyntaxKind::KwMatch);
+        let old = self.forbid_struct_expr;
+        self.forbid_struct_expr = true;
+        self.parse_expr();
+        self.forbid_struct_expr = old;
+        self.expect(SyntaxKind::LBrace);
+        
+        while self.at(SyntaxKind::KwCase) {
+            self.start_node(SyntaxKind::MATCH_ARM);
+            self.advance(); // consume case
+            
+            self.parse_pattern();
+            self.expect(SyntaxKind::FatArrow);
+            
+            if self.at(SyntaxKind::LBrace) {
+                self.parse_block();
+            } else {
+                self.parse_expr();
+            }
+            self.finish_node();
+            
+            if self.at(SyntaxKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(SyntaxKind::RBrace);
+        self.finish_node();
+    }
+
+    fn parse_pattern(&mut self) {
+        self.start_node(SyntaxKind::PATTERN);
+        if self.at(SyntaxKind::Ident) {
+            self.advance();
+            if self.at(SyntaxKind::LParen) {
+                self.advance();
+                loop {
+                    self.parse_pattern();
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(SyntaxKind::RParen);
+            }
+        } else if self.at(SyntaxKind::IntLit) || self.at(SyntaxKind::BoolTrue) || self.at(SyntaxKind::BoolFalse) {
+            self.advance();
+        } else {
+            self.error("Expected pattern");
+            self.advance();
+        }
+        self.finish_node();
     }
 
     fn parse_enum_decl(&mut self) {
@@ -864,5 +933,19 @@ mod tests {
         let input = "func f(): i32 { return 42 }"; // missing semicolon after 42
         let (_, errors) = parse(input);
         assert!(!errors.is_empty(), "Expected a parse error for missing semicolon");
+    }
+
+    #[test]
+    fn test_parse_variant() {
+        let input = "variant Option { None, Some(i32) }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "Expected no parse errors, got {:?}", errors);
+    }
+
+    #[test]
+    fn test_parse_match_expr() {
+        let input = "func main(): i32 { const x: i32 = match opt { case None => 0, case Some(x) => x }; return x; }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "Expected no parse errors, got {:?}", errors);
     }
 }

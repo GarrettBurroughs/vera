@@ -508,6 +508,9 @@ impl VariantCase {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
     }
+    pub fn types(&self) -> impl Iterator<Item = TypeRef> {
+        self.syntax().children().filter_map(TypeRef::cast)
+    }
 }
 
 impl MatchExpr {

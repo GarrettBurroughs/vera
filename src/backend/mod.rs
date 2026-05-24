@@ -6,7 +6,7 @@ use inkwell::module::Module;
 use inkwell::values::{PointerValue, BasicValueEnum, IntValue, BasicMetadataValueEnum};
 use inkwell::types::BasicTypeEnum;
 use std::collections::BTreeMap;
-use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp};
+use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
 
 struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -15,6 +15,7 @@ struct CodeGen<'ctx> {
     scopes: Vec<BTreeMap<String, (PointerValue<'ctx>, HirType)>>,
     struct_layouts: BTreeMap<String, Vec<(String, HirType)>>,
     structs: BTreeMap<String, inkwell::types::StructType<'ctx>>,
+    variants: BTreeMap<String, Vec<(String, Vec<HirType>)>>,
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
 }
 
@@ -40,6 +41,11 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             HirType::Enum(_) => Ok(self.context.i32_type().into()),
+            HirType::Variant(_) => {
+                let i32_ty = self.context.i32_type();
+                let payload_ty = self.context.i64_type().array_type(4); // 32 bytes max payload
+                Ok(self.context.struct_type(&[i32_ty.into(), payload_ty.into()], false).into())
+            }
             _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
         }
     }
@@ -360,8 +366,112 @@ impl<'ctx> CodeGen<'ctx> {
                 let res = self.builder.build_extract_value(base_val.into_struct_value(), field_idx as u32, "extract").unwrap();
                 Ok(res)
             }
-            HirExpr::VariantConstructor(_, _, _, _) => {
-                Err("VariantConstructor codegen is not implemented yet".into())
+            HirExpr::VariantConstructor(variant_name, case_name, args, ty) => {
+                let variant_ty = self.lower_type(ty)?;
+                let ptr = self.builder.build_alloca(variant_ty, "variant_alloca").unwrap();
+
+                let cases = self.variants.get(variant_name).unwrap();
+                let case_idx = cases.iter().position(|(n, _)| n == case_name).unwrap();
+
+                let tag_ptr = self.builder.build_struct_gep(variant_ty, ptr, 0, "tag_ptr").unwrap();
+                self.builder.build_store(tag_ptr, self.context.i32_type().const_int(case_idx as u64, false)).unwrap();
+
+                if args.len() > 0 {
+                    let mut arg_types = vec![];
+                    for arg in args {
+                        arg_types.push(self.lower_type(&arg.ty())?.into());
+                    }
+                    let payload_struct_ty = self.context.struct_type(&arg_types, false);
+                    
+                    let payload_ptr = self.builder.build_struct_gep(variant_ty, ptr, 1, "payload_ptr").unwrap();
+                    
+                    let mut payload_val = payload_struct_ty.get_undef();
+                    for (i, arg_expr) in args.iter().enumerate() {
+                        let arg_val = self.compile_expr(arg_expr)?;
+                        payload_val = self.builder.build_insert_value(payload_val, arg_val, i as u32, "insert").unwrap().into_struct_value();
+                    }
+                    self.builder.build_store(payload_ptr, payload_val).unwrap();
+                }
+
+                let val = self.builder.build_load(variant_ty, ptr, "variant_val").unwrap();
+                Ok(val)
+            }
+            HirExpr::Match(target, arms, match_ty) => {
+                let target_val = self.compile_expr(target)?;
+                let target_ty_hir = target.ty();
+                let variant_name = if let HirType::Variant(n) = target_ty_hir { n } else { return Err("Match target must be a variant".into()); };
+                let variant_ty_llvm = self.lower_type(&HirType::Variant(variant_name.clone()))?;
+                
+                let tag_val = self.builder.build_extract_value(target_val.into_struct_value(), 0, "tag").unwrap().into_int_value();
+                
+                let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let merge_bb = self.context.append_basic_block(function, "match_merge");
+                
+                let res_llvm_ty = self.lower_type(match_ty)?;
+                let res_ptr = self.builder.build_alloca(res_llvm_ty, "match_res").unwrap();
+                
+                let mut switch_cases = vec![];
+                
+                let cases = self.variants.get(&variant_name).unwrap().clone();
+                let mut case_blocks = vec![];
+                
+                for (pattern, arm_expr) in arms {
+                    if let HirPattern::VariantCase(case_name, bindings) = pattern {
+                        let case_idx = cases.iter().position(|(n, _)| n == case_name).unwrap();
+                        let case_bb = self.context.append_basic_block(function, &format!("match_case_{}", case_name));
+                        switch_cases.push((self.context.i32_type().const_int(case_idx as u64, false), case_bb));
+                        case_blocks.push((case_idx, bindings, arm_expr, case_bb));
+                    }
+                }
+                
+                let default_bb = self.context.append_basic_block(function, "match_default");
+                self.builder.build_switch(tag_val, default_bb, &switch_cases).unwrap();
+                
+                self.builder.position_at_end(default_bb);
+                self.builder.build_unreachable().unwrap();
+                
+                for (case_idx, bindings, arm_expr, case_bb) in case_blocks {
+                    self.builder.position_at_end(case_bb);
+                    
+                    self.enter_scope();
+                    
+                    if bindings.len() > 0 {
+                        let target_ptr = self.builder.build_alloca(variant_ty_llvm, "match_target_ptr").unwrap();
+                        self.builder.build_store(target_ptr, target_val).unwrap();
+                        
+                        let payload_ptr = self.builder.build_struct_gep(variant_ty_llvm, target_ptr, 1, "payload_ptr").unwrap();
+                        
+                        let case_field_types = &cases[case_idx].1;
+                        let mut arg_types = vec![];
+                        for ty in case_field_types {
+                            arg_types.push(self.lower_type(ty)?.into());
+                        }
+                        let payload_struct_ty = self.context.struct_type(&arg_types, false);
+                        
+                        let payload_val = self.builder.build_load(payload_struct_ty, payload_ptr, "payload_val").unwrap().into_struct_value();
+                        
+                        for (i, bind_name) in bindings.iter().enumerate() {
+                            let field_val = self.builder.build_extract_value(payload_val, i as u32, bind_name).unwrap();
+                            let field_ty_llvm = self.lower_type(&case_field_types[i])?;
+                            let bind_alloca = self.builder.build_alloca(field_ty_llvm, bind_name).unwrap();
+                            self.builder.build_store(bind_alloca, field_val).unwrap();
+                            self.declare_var(bind_name.clone(), bind_alloca, case_field_types[i].clone());
+                        }
+                    }
+                    
+                    let arm_val = self.compile_expr(arm_expr)?;
+                    self.builder.build_store(res_ptr, arm_val).unwrap();
+                    
+                    self.exit_scope();
+                    
+                    if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                        self.builder.build_unconditional_branch(merge_bb).unwrap();
+                    }
+                }
+                
+                self.builder.position_at_end(merge_bb);
+                let res = self.builder.build_load(res_llvm_ty, res_ptr, "match_res_val").unwrap();
+                Ok(res)
             }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
@@ -380,6 +490,7 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         scopes: Vec::new(),
         struct_layouts: hir.structs.clone(),
         structs: BTreeMap::new(),
+        variants: hir.variants.clone(),
         loop_stack: Vec::new(),
     };
     

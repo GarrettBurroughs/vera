@@ -2,7 +2,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 use std::collections::BTreeMap;
 use crate::parser::ast::{self, AstNode};
-use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp};
+use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum SemanticError {
@@ -51,6 +51,7 @@ pub struct LoweringContext {
     pub functions: BTreeMap<String, (Vec<(String, HirType)>, HirType)>, // name -> (params, ret_ty)
     pub structs: BTreeMap<String, Vec<(String, HirType)>>, // name -> fields
     pub enums: BTreeMap<String, Vec<String>>, // name -> variants
+    pub variants: BTreeMap<String, Vec<(String, Vec<HirType>)>>, // name -> cases
     current_func_ret_type: HirType,
 }
 
@@ -62,6 +63,7 @@ impl LoweringContext {
             functions: BTreeMap::new(),
             structs: BTreeMap::new(),
             enums: BTreeMap::new(),
+            variants: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
         }
     }
@@ -115,6 +117,21 @@ impl LoweringContext {
             self.enums.insert(name, variants);
         }
 
+        // Pass 0.6: Gather variants
+        for v in source_file.variants() {
+            let name = v.name().map(|n| n.text().to_string()).unwrap_or_default();
+            let mut cases = Vec::new();
+            for case in v.cases() {
+                let case_name = case.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let mut payload_tys = Vec::new();
+                for ty_ref in case.types() {
+                    payload_tys.push(self.lower_type(&ty_ref));
+                }
+                cases.push((case_name, payload_tys));
+            }
+            self.variants.insert(name, cases);
+        }
+
         // Pass 1: Gather signatures
         for func in source_file.functions() {
             let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
@@ -144,6 +161,7 @@ impl LoweringContext {
         HirProgram {
             structs: self.structs.clone(),
             enums: self.enums.clone(),
+            variants: self.variants.clone(),
             functions,
         }
     }
@@ -213,11 +231,68 @@ impl LoweringContext {
                     HirType::Struct(name)
                 } else if self.enums.contains_key(&name) {
                     HirType::Enum(name)
+                } else if self.variants.contains_key(&name) {
+                    HirType::Variant(name)
                 } else {
                     self.errors.push(SemanticError::UnknownType { name });
                     HirType::Error
                 }
             }
+        }
+    }
+
+    fn lower_pattern(&mut self, pat: &ast::Pattern) -> HirPattern {
+        let name = pat.name().map(|n| n.text().to_string()).unwrap_or_default();
+        if name == "_" {
+            HirPattern::Wildcard
+        } else {
+            let has_paren = pat.syntax().children().any(|c| c.kind() == crate::parser::syntax::SyntaxKind::PATTERN);
+            if has_paren {
+                let mut bindings = Vec::new();
+                for child in pat.syntax().children().filter_map(ast::Pattern::cast) {
+                    if let Some(c_name) = child.name() {
+                        bindings.push(c_name.text().to_string());
+                    }
+                }
+                HirPattern::VariantCase(name, bindings)
+            } else {
+                let mut is_case = false;
+                for cases in self.variants.values() {
+                    if cases.iter().any(|(n, _)| n == &name) {
+                        is_case = true;
+                        break;
+                    }
+                }
+                if is_case {
+                    HirPattern::VariantCase(name, Vec::new())
+                } else {
+                    HirPattern::Binding(name)
+                }
+            }
+        }
+    }
+
+    fn declare_pattern_bindings(&mut self, pat: &HirPattern, val_ty: &HirType) {
+        match pat {
+            HirPattern::Binding(name) => {
+                self.declare_var(name.clone(), val_ty.clone(), true);
+            }
+            HirPattern::VariantCase(case_name, bindings) => {
+                if let HirType::Variant(v_name) = val_ty {
+                    let payload_tys_opt = if let Some(cases) = self.variants.get(v_name) {
+                        if let Some((_, payload_tys)) = cases.iter().find(|(n, _)| n == case_name) {
+                            Some(payload_tys.clone())
+                        } else { None }
+                    } else { None };
+                    
+                    if let Some(payload_tys) = payload_tys_opt {
+                        for (b_name, b_ty) in bindings.iter().zip(payload_tys.iter()) {
+                            self.declare_var(b_name.clone(), b_ty.clone(), true);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -352,7 +427,57 @@ impl LoweringContext {
                 }
             }
             ast::Expr::CallExpr(call_expr) => {
-                if let Some(ast::Expr::NameRef(name_ref)) = call_expr.callee() {
+                let mut is_variant_constructor = false;
+                let mut variant_name_opt = None;
+                let mut case_name_opt = None;
+                
+                if let Some(ast::Expr::FieldExpr(field_expr)) = call_expr.callee() {
+                    if let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
+                        let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
+                        if self.variants.contains_key(&name) {
+                            let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
+                            is_variant_constructor = true;
+                            variant_name_opt = Some(name);
+                            case_name_opt = Some(field_name);
+                        }
+                    }
+                }
+                
+                if is_variant_constructor {
+                    let variant_name = variant_name_opt.unwrap();
+                    let case_name = case_name_opt.unwrap();
+                    let payload_tys_opt = {
+                        let cases = self.variants.get(&variant_name).unwrap();
+                        cases.iter().find(|(n, _)| n == &case_name).map(|(_, tys)| tys.clone())
+                    };
+                    
+                    if let Some(payload_tys) = payload_tys_opt {
+                        let mut args = Vec::new();
+                        if let Some(arg_list) = call_expr.arg_list() {
+                            for arg in arg_list.args() {
+                                args.push(self.lower_expr(&arg));
+                            }
+                        }
+                        
+                        if args.len() != payload_tys.len() {
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("arity mismatch for variant case {}.{}", variant_name, case_name) });
+                            HirExpr::Error
+                        } else {
+                            for (arg, expected_ty) in args.iter().zip(payload_tys.iter()) {
+                                if arg.ty() != HirType::Error && arg.ty() != *expected_ty {
+                                    self.errors.push(SemanticError::TypeMismatch {
+                                        expected: expected_ty.clone(),
+                                        found: arg.ty(),
+                                    });
+                                }
+                            }
+                            HirExpr::VariantConstructor(variant_name.clone(), case_name, args, HirType::Variant(variant_name))
+                        }
+                    } else {
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", case_name, variant_name) });
+                        HirExpr::Error
+                    }
+                } else if let Some(ast::Expr::NameRef(name_ref)) = call_expr.callee() {
                     let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                     let func_info = self.functions.get(&name).cloned();
                     if let Some((sig_params, ret_ty)) = func_info {
@@ -505,11 +630,17 @@ impl LoweringContext {
             ast::Expr::FieldExpr(field_expr) => {
                 let mut is_enum_variant = false;
                 let mut enum_name_opt = None;
+                let mut is_variant_case = false;
+                let mut variant_name_opt = None;
+                
                 if let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
                     let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                     if self.enums.contains_key(&name) {
                         is_enum_variant = true;
                         enum_name_opt = Some(name);
+                    } else if self.variants.contains_key(&name) {
+                        is_variant_case = true;
+                        variant_name_opt = Some(name);
                     }
                 }
                 
@@ -522,6 +653,20 @@ impl LoweringContext {
                         HirExpr::EnumVariant(enum_name.clone(), field_name, idx as u64, HirType::Enum(enum_name))
                     } else {
                         self.errors.push(SemanticError::UndefinedVariable { name: format!("variant {} in enum {}", field_name, enum_name) });
+                        HirExpr::Error
+                    }
+                } else if is_variant_case {
+                    let variant_name = variant_name_opt.unwrap();
+                    let cases = self.variants.get(&variant_name).unwrap();
+                    if let Some((case_name, payload_tys)) = cases.iter().find(|(n, _)| n == &field_name) {
+                        if payload_tys.is_empty() {
+                            HirExpr::VariantConstructor(variant_name.clone(), case_name.clone(), Vec::new(), HirType::Variant(variant_name))
+                        } else {
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {} requires parameters", field_name, variant_name) });
+                            HirExpr::Error
+                        }
+                    } else {
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", field_name, variant_name) });
                         HirExpr::Error
                     }
                 } else {
@@ -545,9 +690,40 @@ impl LoweringContext {
                     }
                 }
             }
-            ast::Expr::MatchExpr(_) => {
-                // Feature C
-                HirExpr::Error
+            ast::Expr::MatchExpr(match_expr) => {
+                let expr = match_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let mut arms = Vec::new();
+                let mut ret_ty = HirType::Error;
+                
+                for arm in match_expr.arms() {
+                    self.enter_scope();
+                    let pat = if let Some(p) = arm.pattern() {
+                        self.lower_pattern(&p)
+                    } else {
+                        HirPattern::Wildcard
+                    };
+                    self.declare_pattern_bindings(&pat, &expr.ty());
+                    
+                    let arm_expr = if let Some(e) = arm.val() {
+                        self.lower_expr(&e)
+                    } else {
+                        HirExpr::Error
+                    };
+                    self.exit_scope();
+                    
+                    if arm_expr.ty() != HirType::Error {
+                        if ret_ty == HirType::Error {
+                            ret_ty = arm_expr.ty();
+                        } else if ret_ty != arm_expr.ty() {
+                            self.errors.push(SemanticError::TypeMismatch {
+                                expected: ret_ty.clone(),
+                                found: arm_expr.ty(),
+                            });
+                        }
+                    }
+                    arms.push((pat, arm_expr));
+                }
+                HirExpr::Match(Box::new(expr), arms, ret_ty)
             }
         }
     }
