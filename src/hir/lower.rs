@@ -50,6 +50,7 @@ pub struct LoweringContext {
     scopes: Vec<Scope>,
     pub functions: BTreeMap<String, (Vec<(String, HirType)>, HirType)>, // name -> (params, ret_ty)
     pub structs: BTreeMap<String, Vec<(String, HirType)>>, // name -> fields
+    pub enums: BTreeMap<String, Vec<String>>, // name -> variants
     current_func_ret_type: HirType,
 }
 
@@ -60,6 +61,7 @@ impl LoweringContext {
             scopes: Vec::new(),
             functions: BTreeMap::new(),
             structs: BTreeMap::new(),
+            enums: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
         }
     }
@@ -101,6 +103,18 @@ impl LoweringContext {
             self.structs.insert(name, fields);
         }
 
+        // Pass 0.5: Gather enums
+        for e in source_file.enums() {
+            let name = e.name().map(|n| n.text().to_string()).unwrap_or_default();
+            let mut variants = Vec::new();
+            for v in e.variants() {
+                if let Some(v_name) = v.name() {
+                    variants.push(v_name.text().to_string());
+                }
+            }
+            self.enums.insert(name, variants);
+        }
+
         // Pass 1: Gather signatures
         for func in source_file.functions() {
             let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
@@ -127,7 +141,11 @@ impl LoweringContext {
                 functions.push(f);
             }
         }
-        HirProgram { structs: self.structs.clone(), functions }
+        HirProgram {
+            structs: self.structs.clone(),
+            enums: self.enums.clone(),
+            functions,
+        }
     }
 
     fn lower_func(&mut self, func: &ast::FuncDecl) -> Option<HirFunc> {
@@ -193,6 +211,8 @@ impl LoweringContext {
             _ => {
                 if self.structs.contains_key(&name) {
                     HirType::Struct(name)
+                } else if self.enums.contains_key(&name) {
+                    HirType::Enum(name)
                 } else {
                     self.errors.push(SemanticError::UnknownType { name });
                     HirType::Error
@@ -483,26 +503,51 @@ impl LoweringContext {
                 }
             }
             ast::Expr::FieldExpr(field_expr) => {
-                let base = field_expr.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let mut is_enum_variant = false;
+                let mut enum_name_opt = None;
+                if let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
+                    let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
+                    if self.enums.contains_key(&name) {
+                        is_enum_variant = true;
+                        enum_name_opt = Some(name);
+                    }
+                }
+                
                 let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
                 
-                if let HirType::Struct(s_name) = base.ty() {
-                    if let Some(def_fields) = self.structs.get(&s_name) {
-                        if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == &field_name) {
-                            HirExpr::FieldAccess(Box::new(base), field_name, def_ty.clone())
+                if is_enum_variant {
+                    let enum_name = enum_name_opt.unwrap();
+                    let variants = self.enums.get(&enum_name).unwrap();
+                    if let Some(idx) = variants.iter().position(|v| v == &field_name) {
+                        HirExpr::EnumVariant(enum_name.clone(), field_name, idx as u64, HirType::Enum(enum_name))
+                    } else {
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant {} in enum {}", field_name, enum_name) });
+                        HirExpr::Error
+                    }
+                } else {
+                    let base = field_expr.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                    if let HirType::Struct(s_name) = base.ty() {
+                        if let Some(def_fields) = self.structs.get(&s_name) {
+                            if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == &field_name) {
+                                HirExpr::FieldAccess(Box::new(base), field_name, def_ty.clone())
+                            } else {
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", field_name, s_name) });
+                                HirExpr::Error
+                            }
                         } else {
-                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", field_name, s_name) });
                             HirExpr::Error
                         }
+                    } else if base.ty() != HirType::Error {
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("field access on non-struct type {:?}", base.ty()) });
+                        HirExpr::Error
                     } else {
                         HirExpr::Error
                     }
-                } else if base.ty() != HirType::Error {
-                    self.errors.push(SemanticError::UndefinedVariable { name: format!("field access on non-struct type {:?}", base.ty()) });
-                    HirExpr::Error
-                } else {
-                    HirExpr::Error
                 }
+            }
+            ast::Expr::MatchExpr(_) => {
+                // Feature C
+                HirExpr::Error
             }
         }
     }

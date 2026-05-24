@@ -63,6 +63,14 @@ ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
 ast_node!(StructExprField, SyntaxKind::STRUCT_EXPR_FIELD);
 ast_node!(FieldExpr, SyntaxKind::FIELD_EXPR);
 
+ast_node!(EnumDecl, SyntaxKind::ENUM_DECL);
+ast_node!(EnumVariant, SyntaxKind::ENUM_VARIANT);
+ast_node!(VariantDecl, SyntaxKind::VARIANT_DECL);
+ast_node!(VariantCase, SyntaxKind::VARIANT_CASE);
+ast_node!(MatchExpr, SyntaxKind::MATCH_EXPR);
+ast_node!(MatchArm, SyntaxKind::MATCH_ARM);
+ast_node!(Pattern, SyntaxKind::PATTERN);
+
 ast_node!(SpecBlock, SyntaxKind::SPEC_BLOCK);
 ast_node!(RequiresClause, SyntaxKind::REQUIRES_CLAUSE);
 ast_node!(EnsuresClause, SyntaxKind::ENSURES_CLAUSE);
@@ -115,6 +123,7 @@ pub enum Expr {
     CallExpr(CallExpr),
     StructExpr(StructExpr),
     FieldExpr(FieldExpr),
+    MatchExpr(MatchExpr),
 }
 
 impl Expr {
@@ -128,6 +137,7 @@ impl Expr {
             SyntaxKind::CALL_EXPR => CallExpr::cast(node).map(Expr::CallExpr),
             SyntaxKind::STRUCT_EXPR => StructExpr::cast(node).map(Expr::StructExpr),
             SyntaxKind::FIELD_EXPR => FieldExpr::cast(node).map(Expr::FieldExpr),
+            SyntaxKind::MATCH_EXPR => MatchExpr::cast(node).map(Expr::MatchExpr),
             _ => None,
         }
     }
@@ -141,6 +151,12 @@ impl SourceFile {
     }
     pub fn structs(&self) -> impl Iterator<Item = StructDecl> {
         self.syntax().children().filter_map(StructDecl::cast)
+    }
+    pub fn enums(&self) -> impl Iterator<Item = EnumDecl> {
+        self.syntax().children().filter_map(EnumDecl::cast)
+    }
+    pub fn variants(&self) -> impl Iterator<Item = VariantDecl> {
+        self.syntax().children().filter_map(VariantDecl::cast)
     }
 }
 
@@ -463,3 +479,60 @@ impl WhileStmt {
 
 impl BreakStmt {}
 impl ContinueStmt {}
+
+impl EnumDecl {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn variants(&self) -> impl Iterator<Item = EnumVariant> {
+        self.syntax().children().filter_map(EnumVariant::cast)
+    }
+}
+
+impl EnumVariant {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+}
+
+impl VariantDecl {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn cases(&self) -> impl Iterator<Item = VariantCase> {
+        self.syntax().children().filter_map(VariantCase::cast)
+    }
+}
+
+impl VariantCase {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+}
+
+impl MatchExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    pub fn arms(&self) -> impl Iterator<Item = MatchArm> {
+        self.syntax().children().filter_map(MatchArm::cast)
+    }
+}
+
+impl MatchArm {
+    pub fn pattern(&self) -> Option<Pattern> {
+        self.syntax().children().find_map(Pattern::cast)
+    }
+    pub fn val(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    pub fn body(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
+    }
+}
+
+impl Pattern {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+}

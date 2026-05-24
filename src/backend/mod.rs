@@ -39,6 +39,7 @@ impl<'ctx> CodeGen<'ctx> {
                     Err(format!("Struct type not found: {}", name))
                 }
             }
+            HirType::Enum(_) => Ok(self.context.i32_type().into()),
             _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
         }
     }
@@ -217,6 +218,9 @@ impl<'ctx> CodeGen<'ctx> {
             HirExpr::BoolLiteral(val, _) => {
                 Ok(self.context.bool_type().const_int(if *val { 1 } else { 0 }, false).into())
             }
+            HirExpr::EnumVariant(_, _, val, _) => {
+                Ok(self.context.i32_type().const_int(*val, false).into())
+            }
             HirExpr::VarRef(name, _) => {
                 if let Some((alloca, ty)) = self.lookup_var(name) {
                     let llvm_ty = self.lower_type(&ty)?;
@@ -246,7 +250,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let rhs_val = self.compile_expr(rhs)?;
 
                 let res = match lhs_ty {
-                    HirType::I32 | HirType::Bool => {
+                    HirType::I32 | HirType::Bool | HirType::Enum(_) => {
                         let lhs_int = lhs_val.into_int_value();
                         let rhs_int = rhs_val.into_int_value();
                         match op {
@@ -355,6 +359,9 @@ impl<'ctx> CodeGen<'ctx> {
                 
                 let res = self.builder.build_extract_value(base_val.into_struct_value(), field_idx as u32, "extract").unwrap();
                 Ok(res)
+            }
+            HirExpr::VariantConstructor(_, _, _, _) => {
+                Err("VariantConstructor codegen is not implemented yet".into())
             }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }

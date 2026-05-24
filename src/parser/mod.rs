@@ -64,8 +64,12 @@ impl<'a> Parser<'a> {
                 self.parse_func();
             } else if kind == SyntaxKind::KwStruct {
                 self.parse_struct_decl();
+            } else if kind == SyntaxKind::KwEnum {
+                self.parse_enum_decl();
+            } else if kind == SyntaxKind::KwVariant {
+                self.parse_variant_decl();
             } else {
-                self.error("Expected function or struct declaration");
+                self.error("Expected function, struct, enum, or variant declaration");
                 self.advance();
             }
             self.eat_trivia();
@@ -587,6 +591,101 @@ impl<'a> Parser<'a> {
             self.error("Expected expression");
             self.advance(); // Prevent infinite loop
         }
+    }
+
+    fn parse_enum_decl(&mut self) {
+        self.start_node(SyntaxKind::ENUM_DECL);
+        
+        if self.at(SyntaxKind::KwPub) {
+            self.advance();
+        }
+        
+        self.expect(SyntaxKind::KwEnum);
+        self.expect(SyntaxKind::Ident);
+        self.expect(SyntaxKind::LBrace);
+        
+        while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+            self.start_node(SyntaxKind::ENUM_VARIANT);
+            self.expect(SyntaxKind::Ident);
+            self.finish_node();
+            
+            if self.at(SyntaxKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(SyntaxKind::RBrace);
+        self.finish_node();
+    }
+
+    fn parse_variant_decl(&mut self) {
+        self.start_node(SyntaxKind::VARIANT_DECL);
+        
+        if self.at(SyntaxKind::KwPub) {
+            self.advance();
+        }
+        
+        self.expect(SyntaxKind::KwVariant);
+        self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::LBracket) {
+            self.advance();
+            loop {
+                self.expect(SyntaxKind::Ident);
+                if self.at(SyntaxKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(SyntaxKind::RBracket);
+        }
+        
+        self.expect(SyntaxKind::LBrace);
+        
+        while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+            self.start_node(SyntaxKind::VARIANT_CASE);
+            self.expect(SyntaxKind::Ident);
+            
+            if self.at(SyntaxKind::LParen) {
+                self.advance();
+                loop {
+                    self.parse_type();
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(SyntaxKind::RParen);
+            } else if self.at(SyntaxKind::LBrace) {
+                self.advance();
+                while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+                    self.expect(SyntaxKind::Ident);
+                    self.expect(SyntaxKind::Colon);
+                    self.parse_type();
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(SyntaxKind::RBrace);
+            }
+            
+            self.finish_node();
+            
+            if self.at(SyntaxKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(SyntaxKind::RBrace);
+        self.finish_node();
     }
 }
 

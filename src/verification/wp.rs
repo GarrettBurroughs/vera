@@ -83,6 +83,7 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
         HirExpr::IntLiteral(v, _) => SmtExpr::IntConst(*v),
         HirExpr::BoolLiteral(v, _) => SmtExpr::BoolConst(*v),
         HirExpr::VarRef(name, _) => SmtExpr::Var(name.clone()),
+        HirExpr::EnumVariant(_, _, val, _) => SmtExpr::IntConst(*val as i64),
         HirExpr::Call(name, _, ty) => {
             // For Phase 5, we treat function calls as opaque values in WP.
             // In the future, we will use uninterpreted functions or inline contracts.
