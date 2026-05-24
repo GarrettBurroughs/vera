@@ -1,5 +1,5 @@
-// run-pass
-// TODO: Refinement Types verification is not implemented yet. Update test directives when complete.
+// verify-fail
+// Refinement Types verification test
 
 type Nat = i32 where (self >= 0);
 

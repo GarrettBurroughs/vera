@@ -46,6 +46,8 @@ pub enum SmtExpr {
     /// Existential quantifier: `(exists ((var Int)) body)`
     #[allow(dead_code)] // Scaffolded for loop invariant quantifier support (Phase 2)
     Exists(String, Box<SmtExpr>),
+    /// Custom uninterpreted function call
+    FuncCall(String, Vec<SmtExpr>),
 }
 
 impl SmtExpr {
@@ -87,6 +89,26 @@ impl SmtExpr {
                     SmtExpr::Exists(bound.clone(), Box::new(body.substitute(var_name, replacement)))
                 }
             }
+            SmtExpr::FuncCall(name, args) => {
+                let new_args: Vec<SmtExpr> = args.iter().map(|a| a.substitute(var_name, replacement)).collect();
+                if name == "is_ok" && new_args.len() == 1 {
+                    if let SmtExpr::FuncCall(inner_name, _) = &new_args[0] {
+                        if inner_name == "mk_ok" { return SmtExpr::BoolConst(true); }
+                        if inner_name == "mk_err" { return SmtExpr::BoolConst(false); }
+                    }
+                }
+                if name == "unwrap_ok" && new_args.len() == 1 {
+                    if let SmtExpr::FuncCall(inner_name, inner_args) = &new_args[0] {
+                        if inner_name == "mk_ok" { return inner_args[0].clone(); }
+                    }
+                }
+                if name == "unwrap_err" && new_args.len() == 1 {
+                    if let SmtExpr::FuncCall(inner_name, inner_args) = &new_args[0] {
+                        if inner_name == "mk_err" { return inner_args[0].clone(); }
+                    }
+                }
+                SmtExpr::FuncCall(name.clone(), new_args)
+            }
         }
     }
 
@@ -111,6 +133,14 @@ impl SmtExpr {
             SmtExpr::Not(inner) => format!("(not {})", inner.to_smtlib2()),
             SmtExpr::Forall(var, body) => format!("(forall (({} Int)) {})", var, body.to_smtlib2()),
             SmtExpr::Exists(var, body) => format!("(exists (({} Int)) {})", var, body.to_smtlib2()),
+            SmtExpr::FuncCall(name, args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let args_str: Vec<String> = args.iter().map(|a| a.to_smtlib2()).collect();
+                    format!("({} {})", name, args_str.join(" "))
+                }
+            }
         }
     }
 }
@@ -124,6 +154,14 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
 
     let mut smt_script = String::new();
     
+    // Result uninterpreted functions and axioms
+    smt_script.push_str("(declare-fun mk_ok (Int) Int)\n");
+    smt_script.push_str("(declare-fun mk_err (Int) Int)\n");
+    smt_script.push_str("(declare-fun is_ok (Int) Bool)\n");
+    smt_script.push_str("(declare-fun unwrap_ok (Int) Int)\n");
+    smt_script.push_str("(declare-fun unwrap_err (Int) Int)\n");
+
+
     // For now, we assume all variables are integers. We would need type tracking in SmtExpr
     // to do this properly.
     for var in vars {
@@ -182,6 +220,11 @@ pub(crate) fn collect_vars(expr: &SmtExpr, vars: &mut BTreeSet<String>) {
                 if &v != bound {
                     vars.insert(v);
                 }
+            }
+        }
+        SmtExpr::FuncCall(_, args) => {
+            for arg in args {
+                collect_vars(arg, vars);
             }
         }
         _ => {}
