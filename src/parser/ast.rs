@@ -56,6 +56,7 @@ ast_node!(ArrayType, SyntaxKind::ARRAY_TYPE);
 ast_node!(SliceType, SyntaxKind::SLICE_TYPE);
 ast_node!(ResultType, SyntaxKind::RESULT_TYPE);
 ast_node!(PointerType, SyntaxKind::POINTER_TYPE);
+ast_node!(RefType, SyntaxKind::REF_TYPE);
 ast_node!(BinExpr, SyntaxKind::BIN_EXPR);
 ast_node!(PrefixExpr, SyntaxKind::PREFIX_EXPR);
 ast_node!(IfExpr, SyntaxKind::IF_EXPR);
@@ -65,6 +66,8 @@ ast_node!(Literal, SyntaxKind::LITERAL);
 ast_node!(CallExpr, SyntaxKind::CALL_EXPR);
 ast_node!(ArgList, SyntaxKind::ARG_LIST);
 ast_node!(TryExpr, SyntaxKind::TRY_EXPR);
+ast_node!(RefExpr, SyntaxKind::REF_EXPR);
+ast_node!(DerefExpr, SyntaxKind::DEREF_EXPR);
 
 ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
 ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
@@ -139,6 +142,8 @@ pub enum Expr {
     IndexExpr(IndexExpr),
     SliceExpr(SliceExpr),
     TryExpr(TryExpr),
+    RefExpr(RefExpr),
+    DerefExpr(DerefExpr),
 }
 
 impl Expr {
@@ -157,6 +162,8 @@ impl Expr {
             SyntaxKind::INDEX_EXPR => IndexExpr::cast(node).map(Expr::IndexExpr),
             SyntaxKind::SLICE_EXPR => SliceExpr::cast(node).map(Expr::SliceExpr),
             SyntaxKind::TRY_EXPR => TryExpr::cast(node).map(Expr::TryExpr),
+            SyntaxKind::REF_EXPR => RefExpr::cast(node).map(Expr::RefExpr),
+            SyntaxKind::DEREF_EXPR => DerefExpr::cast(node).map(Expr::DerefExpr),
             _ => None,
         }
     }
@@ -264,6 +271,24 @@ impl ResultType {
     }
 }
 
+impl RefType {
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+    pub fn is_mut(&self) -> bool {
+        self.syntax().children_with_tokens().any(|t| t.kind() == SyntaxKind::KwMut)
+    }
+}
+
+impl PointerType {
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+    pub fn is_mut(&self) -> bool {
+        self.syntax().children_with_tokens().any(|t| t.kind() == SyntaxKind::KwMut)
+    }
+}
+
 impl BlockExpr {
     pub fn statements(&self) -> impl Iterator<Item = Stmt> {
         self.syntax().children().filter_map(Stmt::cast)
@@ -352,6 +377,21 @@ impl IfExpr {
                     true
                 }
             })
+    }
+}
+
+impl RefExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    pub fn is_mut(&self) -> bool {
+        self.syntax().children_with_tokens().any(|it| it.kind() == SyntaxKind::KwMut)
+    }
+}
+
+impl DerefExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
     }
 }
 

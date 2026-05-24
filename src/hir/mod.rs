@@ -9,8 +9,8 @@ pub enum HirType {
     Array(Box<HirType>, u64),
     Slice(Box<HirType>),
     Result(Box<HirType>, Box<HirType>),
-    Ptr(Box<HirType>),
-    Ref(Box<HirType>),
+    Ptr(Box<HirType>, bool), // (type, is_mut)
+    Ref(Box<HirType>, bool), // (type, is_mut)
     Error,
 }
 
@@ -83,6 +83,8 @@ pub enum HirExpr {
     Try(Box<HirExpr>, HirType), // inner expr, ok type
     ResultOk(Box<HirExpr>, HirType), // inner expr, result type
     ResultErr(Box<HirExpr>, HirType), // inner expr, result type
+    Ref(Box<HirExpr>, bool, HirType), // inner expr, is_mut, result type
+    Deref(Box<HirExpr>, HirType), // inner expr, result type
     Error,
 }
 
@@ -107,8 +109,19 @@ impl HirExpr {
             HirExpr::Try(_, ty) => ty.clone(),
             HirExpr::ResultOk(_, ty) => ty.clone(),
             HirExpr::ResultErr(_, ty) => ty.clone(),
+            HirExpr::Ref(_, _, ty) => ty.clone(),
+            HirExpr::Deref(_, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
+    }
+
+    pub fn is_lvalue(&self) -> bool {
+        matches!(self, 
+            HirExpr::VarRef(..) | 
+            HirExpr::FieldAccess(..) | 
+            HirExpr::IndexExpr(..) | 
+            HirExpr::Deref(..)
+        )
     }
 }
 

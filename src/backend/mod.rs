@@ -25,12 +25,11 @@ impl<'ctx> CodeGen<'ctx> {
             HirType::I32 => Ok(self.context.i32_type().into()),
             HirType::Bool => Ok(self.context.bool_type().into()),
             HirType::Void => Ok(self.context.i32_type().into()), // LLVM needs a type, so i32 is used for void returns
-            HirType::Ptr(inner) => {
-                let inner_ty = self.lower_type(inner)?;
+            HirType::Ptr(_, _) => {
                 // Wait, LLVM 17 uses opaque pointers! So context.ptr_type() is just ptr.
                 Ok(self.context.ptr_type(inkwell::AddressSpace::default()).into())
             }
-            HirType::Ref(_) => {
+            HirType::Ref(_, _) => {
                 Ok(self.context.ptr_type(inkwell::AddressSpace::default()).into())
             }
             HirType::Struct(name) => {
@@ -323,6 +322,52 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    fn compile_lvalue(&mut self, expr: &HirExpr) -> Result<PointerValue<'ctx>, String> {
+        match expr {
+            HirExpr::VarRef(name, _) => {
+                if let Some((alloca, _)) = self.lookup_var(name) {
+                    Ok(alloca)
+                } else {
+                    Err(format!("Undefined variable in lvalue: {}", name))
+                }
+            }
+            HirExpr::FieldAccess(base, field_name, _) => {
+                let base_ptr = self.compile_lvalue(base)?;
+                let base_ty = base.ty();
+                let struct_name = if let HirType::Struct(s) = base_ty { s } else { return Err("Field access on non-struct".into()); };
+                let struct_type = self.structs.get(&struct_name).unwrap();
+                let fields = self.struct_layouts.get(&struct_name).unwrap();
+                let field_idx = fields.iter().position(|(n, _)| n == field_name).unwrap() as u32;
+                Ok(self.builder.build_struct_gep(*struct_type, base_ptr, field_idx, "field_ptr").unwrap())
+            }
+            HirExpr::IndexExpr(base, idx, _) => {
+                let base_ptr = self.compile_lvalue(base)?;
+                let base_ty = base.ty();
+                let idx_val = self.compile_expr(idx)?.into_int_value();
+                let zero = self.context.i32_type().const_int(0, false);
+                match base_ty {
+                    HirType::Array(_, _) => {
+                        let array_llvm_ty = self.lower_type(&base_ty)?;
+                        Ok(unsafe { self.builder.build_gep(array_llvm_ty, base_ptr, &[zero, idx_val], "array_ptr").unwrap() })
+                    }
+                    HirType::Slice(ref inner_ty) => {
+                        let slice_llvm_ty = self.lower_type(&base_ty)?;
+                        let ptr_ptr = self.builder.build_struct_gep(slice_llvm_ty, base_ptr, 0, "slice_ptr_ptr").unwrap();
+                        let ptr_val = self.builder.build_load(self.context.ptr_type(inkwell::AddressSpace::default()), ptr_ptr, "slice_ptr").unwrap().into_pointer_value();
+                        let inner_llvm_ty = self.lower_type(&inner_ty)?;
+                        Ok(unsafe { self.builder.build_gep(inner_llvm_ty, ptr_val, &[idx_val], "slice_idx_ptr").unwrap() })
+                    }
+                    _ => Err("Index on non-array/slice".into()),
+                }
+            }
+            HirExpr::Deref(inner, _) => {
+                let inner_val = self.compile_expr(inner)?.into_pointer_value();
+                Ok(inner_val)
+            }
+            _ => Err(format!("Invalid lvalue expression: {:?}", expr)),
+        }
+    }
+
     fn compile_expr(&mut self, expr: &HirExpr) -> Result<BasicValueEnum<'ctx>, String> {
         match expr {
             HirExpr::IntLiteral(val, _) => {
@@ -345,17 +390,10 @@ impl<'ctx> CodeGen<'ctx> {
             }
             HirExpr::BinaryOp(op, lhs, rhs, ty) => {
                 if *op == BinaryOp::Assign {
-                    if let HirExpr::VarRef(name, _) = &**lhs {
-                        let rhs_val = self.compile_expr(rhs)?;
-                        if let Some((alloca, _)) = self.lookup_var(name) {
-                            self.builder.build_store(alloca, rhs_val).unwrap();
-                            return Ok(rhs_val);
-                        } else {
-                            return Err(format!("Variable {} not found", name));
-                        }
-                    } else {
-                        return Err("Invalid assignment target".into());
-                    }
+                    let rhs_val = self.compile_expr(rhs)?;
+                    let lhs_ptr = self.compile_lvalue(lhs)?;
+                    self.builder.build_store(lhs_ptr, rhs_val).unwrap();
+                    return Ok(rhs_val);
                 }
 
                 let lhs_ty = lhs.ty();
@@ -690,6 +728,15 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(ok_block);
                 let ok_val = self.builder.build_extract_value(inner_val, 1, "ok_val").unwrap();
                 Ok(ok_val)
+            }
+            HirExpr::Ref(inner, _, _) => {
+                let ptr = self.compile_lvalue(inner)?;
+                Ok(ptr.into())
+            }
+            HirExpr::Deref(inner, _) => {
+                let inner_val = self.compile_expr(inner)?.into_pointer_value();
+                let ty = self.lower_type(&expr.ty())?;
+                Ok(self.builder.build_load(ty, inner_val, "deref").unwrap())
             }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }

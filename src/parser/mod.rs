@@ -239,6 +239,28 @@ impl<'a> Parser<'a> {
             self.parse_type(); // Err type
             self.expect(SyntaxKind::RBracket);
             self.finish_node();
+        } else if self.at(SyntaxKind::TyRef) {
+            self.start_node(SyntaxKind::REF_TYPE);
+            self.advance();
+            self.parse_type();
+            self.finish_node();
+        } else if self.at(SyntaxKind::TyPtr) {
+            self.start_node(SyntaxKind::POINTER_TYPE);
+            self.advance();
+            self.parse_type();
+            self.finish_node();
+        } else if self.at(SyntaxKind::KwMut) && self.nth_at(1, SyntaxKind::TyRef) {
+            self.start_node(SyntaxKind::REF_TYPE);
+            self.advance(); // mut
+            self.advance(); // ref
+            self.parse_type();
+            self.finish_node();
+        } else if self.at(SyntaxKind::KwMut) && self.nth_at(1, SyntaxKind::TyPtr) {
+            self.start_node(SyntaxKind::POINTER_TYPE);
+            self.advance(); // mut
+            self.advance(); // ptr
+            self.parse_type();
+            self.finish_node();
         } else if self.at(SyntaxKind::KwMut) && self.nth_at(1, SyntaxKind::TySlice) {
             self.start_node(SyntaxKind::SLICE_TYPE);
             self.advance(); // mut
@@ -545,10 +567,23 @@ impl<'a> Parser<'a> {
     }
     
     fn parse_unary_expr(&mut self) {
-        if self.at(SyntaxKind::Bang) || self.at(SyntaxKind::Minus) || self.at(SyntaxKind::Star) || self.at(SyntaxKind::Amp) {
+        if self.at(SyntaxKind::Star) {
+            self.start_node(SyntaxKind::DEREF_EXPR);
+            self.advance();
+            self.parse_unary_expr();
+            self.finish_node();
+        } else if self.at(SyntaxKind::Amp) {
+            self.start_node(SyntaxKind::REF_EXPR);
+            self.advance();
+            if self.at(SyntaxKind::KwMut) {
+                self.advance();
+            }
+            self.parse_unary_expr();
+            self.finish_node();
+        } else if self.at(SyntaxKind::Bang) || self.at(SyntaxKind::Minus) {
             self.start_node(SyntaxKind::PREFIX_EXPR);
             self.advance();
-            self.parse_postfix_expr();
+            self.parse_unary_expr();
             self.finish_node();
         } else {
             self.parse_postfix_expr();

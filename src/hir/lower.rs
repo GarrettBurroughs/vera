@@ -244,6 +244,18 @@ impl LoweringContext {
             return HirType::Result(Box::new(ok_ty), Box::new(err_ty));
         }
 
+        if let Some(r) = type_ref.syntax().children().find_map(ast::RefType::cast) {
+            let is_mut = r.syntax().children_with_tokens().any(|it| it.kind() == crate::parser::syntax::SyntaxKind::KwMut);
+            let inner_ty = r.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+            return HirType::Ref(Box::new(inner_ty), is_mut);
+        }
+
+        if let Some(p) = type_ref.syntax().children().find_map(ast::PointerType::cast) {
+            let is_mut = p.syntax().children_with_tokens().any(|it| it.kind() == crate::parser::syntax::SyntaxKind::KwMut);
+            let inner_ty = p.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+            return HirType::Ptr(Box::new(inner_ty), is_mut);
+        }
+
         let name = type_ref.as_string().unwrap_or_default();
         match name.as_str() {
             "i32" => HirType::I32,
@@ -579,17 +591,14 @@ impl LoweringContext {
                     };
 
                     if op == BinaryOp::Assign {
-                        // Check if lhs is a VarRef and if it's mutable
-                        if let ast::Expr::NameRef(name_ref) = &bin_expr.lhs().unwrap() {
-                            let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                            if let Some((_, is_const)) = self.lookup_var(&name) {
+                        if !lhs.is_lvalue() {
+                            self.errors.push(SemanticError::Custom("invalid assignment target: not an lvalue".to_string()));
+                        } else if let HirExpr::VarRef(name, _) = &lhs {
+                            if let Some((_, is_const)) = self.lookup_var(name) {
                                 if is_const {
-                                    self.errors.push(SemanticError::ImmutableAssignment { name });
+                                    self.errors.push(SemanticError::ImmutableAssignment { name: name.clone() });
                                 }
                             }
-                        } else {
-                            // Can only assign to variables for now
-                            self.errors.push(SemanticError::UndefinedVariable { name: "invalid assignment target".to_string() });
                         }
                     }
 
@@ -853,6 +862,28 @@ impl LoweringContext {
                     HirType::Error
                 };
                 HirExpr::Try(Box::new(inner), ok_ty)
+            }
+            ast::Expr::RefExpr(ref_expr) => {
+                let inner = ref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                if !inner.is_lvalue() && inner.ty() != HirType::Error {
+                    self.errors.push(SemanticError::Custom("Cannot take address of non-lvalue expression".to_string()));
+                    return HirExpr::Error;
+                }
+                let is_mut = ref_expr.is_mut();
+                let ty = HirType::Ref(Box::new(inner.ty()), is_mut);
+                HirExpr::Ref(Box::new(inner), is_mut, ty)
+            }
+            ast::Expr::DerefExpr(deref_expr) => {
+                let inner = deref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let ty = match inner.ty() {
+                    HirType::Ref(t, _) | HirType::Ptr(t, _) => *t,
+                    HirType::Error => HirType::Error,
+                    other => {
+                        self.errors.push(SemanticError::Custom(format!("Cannot dereference non-pointer type {:?}", other)));
+                        HirType::Error
+                    }
+                };
+                HirExpr::Deref(Box::new(inner), ty)
             }
         }
     }

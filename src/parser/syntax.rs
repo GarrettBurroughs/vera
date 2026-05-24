@@ -72,6 +72,8 @@ pub enum SyntaxKind {
     INDEX_EXPR,
     SLICE_EXPR,
     TRY_EXPR,
+    REF_EXPR,
+    DEREF_EXPR,
     ARRAY_TYPE,
     SLICE_TYPE,
     RESULT_TYPE,
