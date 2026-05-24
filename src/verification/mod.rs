@@ -8,6 +8,7 @@ use crate::hir::HirProgram;
 pub enum VerificationError {
     Z3Error(String),
     ProofFailed(String),
+    VacuousPrecondition(String),
 }
 
 /// Runs the verification pipeline on the HIR program.

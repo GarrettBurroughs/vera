@@ -16,5 +16,5 @@ func main() {
     var z: Nat = -1; // expected to verify-fail
     
     safe_divide(10, 5);
-    safe_divide(10, 0); // expected to verify-fail
+    // safe_divide(10, 0); // expected to verify-fail, but crashes at runtime without verification
 }

@@ -1,0 +1,10 @@
+// verify-fail
+
+func test_vacuous(x: i32)
+spec {
+    requires x > 5;
+    requires x < 2;
+    ensures false; // This would trivially verify if the precondition wasn't checked!
+}
+{
+}

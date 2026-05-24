@@ -31,6 +31,12 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
         }
     }
 
+    // 3.7. Precondition Vacuity Checking
+    // Disallow contradictory preconditions that make the function trivially verifiable
+    if !check_sat(&precondition)? {
+        return Err(VerificationError::VacuousPrecondition(format!("Function '{}' has vacuous (unsatisfiable) preconditions.", func.name)));
+    }
+
     // 4. Final Verification Condition (VC): Requires => WP
     let vc = SmtExpr::Implies(Box::new(precondition), Box::new(current_wp));
 
