@@ -70,8 +70,12 @@ impl<'a> Parser<'a> {
                 self.parse_enum_decl();
             } else if kind == SyntaxKind::KwVariant {
                 self.parse_variant_decl();
+            } else if kind == SyntaxKind::KwTrait {
+                self.parse_trait_decl();
+            } else if kind == SyntaxKind::KwImpl {
+                self.parse_impl_decl();
             } else {
-                self.error("Expected function, struct, enum, or variant declaration");
+                self.error("Expected function, struct, enum, trait, impl, or variant declaration");
                 self.advance();
             }
             self.eat_trivia();
@@ -176,6 +180,11 @@ impl<'a> Parser<'a> {
         
         self.expect(SyntaxKind::KwFunc);
         self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::Less) {
+            self.parse_generic_params();
+        }
+        
         self.expect(SyntaxKind::LParen);
         
         if !self.at(SyntaxKind::RParen) {
@@ -207,7 +216,14 @@ impl<'a> Parser<'a> {
             self.parse_spec_block();
         }
         
-        self.parse_block();
+        if self.at(SyntaxKind::LBrace) {
+            self.parse_block();
+        } else if self.at(SyntaxKind::Semi) {
+            self.advance();
+        } else {
+            self.error("Expected '{' or ';'");
+            self.advance();
+        }
         self.finish_node();
     }
     
@@ -292,7 +308,24 @@ impl<'a> Parser<'a> {
             || self.at(SyntaxKind::TyU32) || self.at(SyntaxKind::TyI64) || self.at(SyntaxKind::TyI16)
             || self.at(SyntaxKind::TyU16) || self.at(SyntaxKind::TyI8) || self.at(SyntaxKind::TyU8)
             || self.at(SyntaxKind::TyString) || self.at(SyntaxKind::TyVoid) || self.at(SyntaxKind::TyChar) {
+            
+            let is_ident = self.at(SyntaxKind::Ident);
             self.advance();
+            
+            if is_ident && self.at(SyntaxKind::Less) {
+                self.start_node(SyntaxKind::GENERIC_ARGS);
+                self.advance(); // <
+                while !self.at(SyntaxKind::Greater) && self.cursor < self.tokens.len() {
+                    self.parse_type();
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(SyntaxKind::Greater);
+                self.finish_node(); // GENERIC_ARGS
+            }
         } else {
             self.error("Expected type");
             self.advance();
@@ -629,6 +662,31 @@ impl<'a> Parser<'a> {
                 self.finish_node(); // finish ARG_LIST
                 let comp = self.complete(m, SyntaxKind::CALL_EXPR);
                 m = self.precede(comp);
+            } else if self.at(SyntaxKind::ColonColon) {
+                let mut peek = self.cursor + 1;
+                while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                    peek += 1;
+                }
+                if peek < self.tokens.len() && self.tokens[peek].0 == SyntaxKind::Less {
+                    self.advance(); // consume ::
+                    self.start_node(SyntaxKind::GENERIC_ARGS);
+                    self.advance(); // consume <
+                    while !self.at(SyntaxKind::Greater) && self.cursor < self.tokens.len() {
+                        self.parse_type();
+                        if self.at(SyntaxKind::Comma) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(SyntaxKind::Greater);
+                    self.finish_node(); // finish GENERIC_ARGS
+                    
+                    let comp = self.complete(m, SyntaxKind::GENERIC_INST_EXPR);
+                    m = self.precede(comp);
+                } else {
+                    break;
+                }
             } else if self.at(SyntaxKind::Dot) {
                 self.advance(); // consume dot
                 self.start_node(SyntaxKind::NAME_REF);
@@ -660,6 +718,72 @@ impl<'a> Parser<'a> {
         }
     }
     
+    fn parse_generic_params(&mut self) {
+        self.start_node(SyntaxKind::GENERIC_PARAMS);
+        self.expect(SyntaxKind::Less);
+        while !self.at(SyntaxKind::Greater) && self.cursor < self.tokens.len() {
+            self.start_node(SyntaxKind::TYPE_REF);
+            self.expect(SyntaxKind::Ident);
+            self.finish_node();
+            if self.at(SyntaxKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(SyntaxKind::Greater);
+        self.finish_node();
+    }
+    
+    fn parse_trait_decl(&mut self) {
+        self.start_node(SyntaxKind::TRAIT_DECL);
+        
+        if self.at(SyntaxKind::KwPub) {
+            self.advance();
+        }
+        
+        self.expect(SyntaxKind::KwTrait);
+        self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::Less) {
+            self.parse_generic_params();
+        }
+        
+        self.expect(SyntaxKind::LBrace);
+        while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+            // Parses method signatures. For now, we reuse `parse_func`,
+            // but `parse_func` expects a body block. 
+            // In traits, methods might lack bodies, but we'll accept them or reuse parse_func.
+            // Let's just call parse_func.
+            self.parse_func();
+        }
+        self.expect(SyntaxKind::RBrace);
+        self.finish_node();
+    }
+    
+    fn parse_impl_decl(&mut self) {
+        self.start_node(SyntaxKind::IMPL_DECL);
+        self.expect(SyntaxKind::KwImpl);
+        
+        if self.at(SyntaxKind::Less) {
+            self.parse_generic_params();
+        }
+        
+        self.parse_type(); // The trait or the target type
+        
+        if self.at(SyntaxKind::KwFor) {
+            self.advance();
+            self.parse_type(); // Target type
+        }
+        
+        self.expect(SyntaxKind::LBrace);
+        while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+            self.parse_func();
+        }
+        self.expect(SyntaxKind::RBrace);
+        self.finish_node();
+    }
+    
     fn parse_struct_decl(&mut self) {
         self.start_node(SyntaxKind::STRUCT_DECL);
         
@@ -669,6 +793,11 @@ impl<'a> Parser<'a> {
         
         self.expect(SyntaxKind::KwStruct);
         self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::Less) {
+            self.parse_generic_params();
+        }
+        
         self.expect(SyntaxKind::LBrace);
         
         self.start_node(SyntaxKind::FIELD_DECL_LIST);
@@ -865,6 +994,11 @@ impl<'a> Parser<'a> {
         
         self.expect(SyntaxKind::KwEnum);
         self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::Less) {
+            self.parse_generic_params();
+        }
+        
         self.expect(SyntaxKind::LBrace);
         
         while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
@@ -892,6 +1026,10 @@ impl<'a> Parser<'a> {
         
         self.expect(SyntaxKind::KwVariant);
         self.expect(SyntaxKind::Ident);
+        
+        if self.at(SyntaxKind::Less) {
+            self.parse_generic_params();
+        }
         
         if self.at(SyntaxKind::LBracket) {
             self.advance();

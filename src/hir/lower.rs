@@ -49,6 +49,16 @@ struct Scope {
     variables: BTreeMap<String, (HirType, bool)>, // type, is_const
 }
 
+#[derive(Default)]
+pub struct TemplateRegistry {
+    pub funcs: BTreeMap<String, ast::FuncDecl>,
+    pub structs: BTreeMap<String, ast::StructDecl>,
+    pub enums: BTreeMap<String, ast::EnumDecl>,
+    pub variants: BTreeMap<String, ast::VariantDecl>,
+    pub traits: BTreeMap<String, ast::TraitDecl>,
+    pub impls: Vec<ast::ImplDecl>,
+}
+
 pub struct LoweringContext {
     pub errors: Vec<SemanticError>,
     scopes: Vec<Scope>,
@@ -56,6 +66,12 @@ pub struct LoweringContext {
     pub structs: BTreeMap<String, Vec<(String, HirType)>>, // name -> fields
     pub enums: BTreeMap<String, Vec<String>>, // name -> variants
     pub variants: BTreeMap<String, Vec<(String, Vec<HirType>)>>, // name -> cases
+    pub generic_templates: TemplateRegistry,
+    pub type_env: BTreeMap<String, HirType>,
+    pub func_worklist: Vec<(String, Vec<HirType>)>,
+    pub struct_worklist: Vec<(String, Vec<HirType>)>,
+    pub enum_worklist: Vec<(String, Vec<HirType>)>,
+    pub variant_worklist: Vec<(String, Vec<HirType>)>,
     current_func_ret_type: HirType,
     in_unsafe_block: bool,
 }
@@ -69,6 +85,12 @@ impl LoweringContext {
             structs: BTreeMap::new(),
             enums: BTreeMap::new(),
             variants: BTreeMap::new(),
+            generic_templates: TemplateRegistry::default(),
+            type_env: BTreeMap::new(),
+            func_worklist: Vec::new(),
+            struct_worklist: Vec::new(),
+            enum_worklist: Vec::new(),
+            variant_worklist: Vec::new(),
             current_func_ret_type: HirType::Void,
             in_unsafe_block: false,
         }
@@ -80,6 +102,95 @@ impl LoweringContext {
 
     fn exit_scope(&mut self) {
         self.scopes.pop();
+    }
+
+    fn request_monomorphize_struct(&mut self, name: &str, args: Vec<HirType>) -> String {
+        let monomorphized_name = if args.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+        };
+        if self.structs.contains_key(&monomorphized_name) {
+            return monomorphized_name;
+        }
+        if self.generic_templates.structs.contains_key(name) {
+            self.struct_worklist.push((name.to_string(), args));
+            // Insert dummy to prevent duplicate requests
+            self.structs.insert(monomorphized_name.clone(), Vec::new());
+        }
+        monomorphized_name
+    }
+
+    fn request_monomorphize_enum(&mut self, name: &str, args: Vec<HirType>) -> String {
+        let monomorphized_name = if args.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+        };
+        if self.enums.contains_key(&monomorphized_name) {
+            return monomorphized_name;
+        }
+        if self.generic_templates.enums.contains_key(name) {
+            self.enum_worklist.push((name.to_string(), args));
+            self.enums.insert(monomorphized_name.clone(), Vec::new());
+        }
+        monomorphized_name
+    }
+
+    fn request_monomorphize_variant(&mut self, name: &str, args: Vec<HirType>) -> String {
+        let monomorphized_name = if args.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+        };
+        if self.variants.contains_key(&monomorphized_name) {
+            return monomorphized_name;
+        }
+        if self.generic_templates.variants.contains_key(name) {
+            self.variant_worklist.push((name.to_string(), args));
+            self.variants.insert(monomorphized_name.clone(), Vec::new());
+        }
+        monomorphized_name
+    }
+
+    fn request_monomorphize_func(&mut self, name: &str, args: Vec<HirType>) -> String {
+        let monomorphized_name = if args.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}_{}", name, args.iter().map(|ty| ty_to_string(ty)).collect::<Vec<_>>().join("_"))
+        };
+        if self.functions.contains_key(&monomorphized_name) {
+            return monomorphized_name;
+        }
+        if let Some(func) = self.generic_templates.funcs.get(name).cloned() {
+            self.func_worklist.push((name.to_string(), args.clone()));
+            
+            let mut old_env = self.type_env.clone();
+            self.type_env.clear();
+            if let Some(params) = func.generic_params() {
+                for (param, arg) in params.params().zip(args.iter()) {
+                    self.type_env.insert(param.as_string().unwrap_or_default(), arg.clone());
+                }
+            }
+            
+            let ret_type = match func.ret_type() {
+                Some(type_ref) => self.lower_type(&type_ref),
+                None => HirType::Void,
+            };
+            let mut params_list = Vec::new();
+            if let Some(param_list) = func.param_list() {
+                for param in param_list.params() {
+                    if let (Some(p_name), Some(p_ty_ref)) = (param.name(), param.ty()) {
+                        let p_ty = self.lower_type(&p_ty_ref);
+                        params_list.push((p_name, p_ty));
+                    }
+                }
+            }
+            self.functions.insert(monomorphized_name.clone(), (params_list, ret_type));
+            
+            self.type_env = old_env;
+        }
+        monomorphized_name
     }
 
     fn declare_var(&mut self, name: String, ty: HirType, is_const: bool) {
@@ -106,74 +217,171 @@ impl LoweringContext {
             _ => false,
         }
     }
+}
 
+pub fn ty_to_string(ty: &HirType) -> String {
+    match ty {
+        HirType::I32 => "I32".to_string(),
+        HirType::Bool => "Bool".to_string(),
+        HirType::Void => "Void".to_string(),
+        HirType::Struct(name) => name.clone(),
+        HirType::Enum(name) => name.clone(),
+        HirType::Variant(name) => name.clone(),
+        HirType::Array(t, size) => format!("Array_{}_{}", ty_to_string(t), size),
+        HirType::Slice(t) => format!("Slice_{}", ty_to_string(t)),
+        HirType::Ptr(t, mutability) => format!("Ptr_{}_{}", if *mutability { "mut" } else { "const" }, ty_to_string(t)),
+        HirType::Ref(t, mutability) => format!("Ref_{}_{}", if *mutability { "mut" } else { "const" }, ty_to_string(t)),
+        HirType::Func(params, ret) => {
+            let mut s = "Func".to_string();
+            for p in params {
+                s.push_str("_");
+                s.push_str(&ty_to_string(p));
+            }
+            s.push_str("_ret_");
+            s.push_str(&ty_to_string(ret));
+            s
+        }
+        HirType::Result(ok, err) => format!("Result_{}_{}", ty_to_string(ok), ty_to_string(err)),
+        HirType::Error => "Error".to_string(),
+    }
+}
+
+impl LoweringContext {
     pub fn lower_program(&mut self, source_file: &ast::SourceFile) -> HirProgram {
-        // Pass 0: Gather structs
+        self.generic_templates = TemplateRegistry::default();
+        self.structs.clear();
+        self.enums.clear();
+        self.variants.clear();
+        self.functions.clear();
+        self.func_worklist.clear();
+        self.struct_worklist.clear();
+        self.enum_worklist.clear();
+        self.variant_worklist.clear();
+
+        // Pass 0: Gather templates
         for s in source_file.structs() {
             let name = s.name().map(|n| n.text().to_string()).unwrap_or_default();
-            let mut fields = Vec::new();
-            for f in s.fields() {
-                if let (Some(f_name), Some(f_ty_ref)) = (f.name(), f.ty()) {
-                    let f_ty = self.lower_type(&f_ty_ref);
-                    fields.push((f_name.text().to_string(), f_ty));
-                }
+            self.generic_templates.structs.insert(name.clone(), s.clone());
+            if s.generic_params().is_none() {
+                self.request_monomorphize_struct(&name, Vec::new());
             }
-            self.structs.insert(name, fields);
         }
 
-        // Pass 0.5: Gather enums
         for e in source_file.enums() {
             let name = e.name().map(|n| n.text().to_string()).unwrap_or_default();
-            let mut variants = Vec::new();
-            for v in e.variants() {
-                if let Some(v_name) = v.name() {
-                    variants.push(v_name.text().to_string());
-                }
+            self.generic_templates.enums.insert(name.clone(), e.clone());
+            if e.generic_params().is_none() {
+                self.request_monomorphize_enum(&name, Vec::new());
             }
-            self.enums.insert(name, variants);
         }
 
-        // Pass 0.6: Gather variants
         for v in source_file.variants() {
             let name = v.name().map(|n| n.text().to_string()).unwrap_or_default();
-            let mut cases = Vec::new();
-            for case in v.cases() {
-                let case_name = case.name().map(|n| n.text().to_string()).unwrap_or_default();
-                let mut payload_tys = Vec::new();
-                for ty_ref in case.types() {
-                    payload_tys.push(self.lower_type(&ty_ref));
-                }
-                cases.push((case_name, payload_tys));
+            self.generic_templates.variants.insert(name.clone(), v.clone());
+            if v.generic_params().is_none() {
+                self.request_monomorphize_variant(&name, Vec::new());
             }
-            self.variants.insert(name, cases);
         }
 
-        // Pass 1: Gather signatures
         for func in source_file.functions() {
             let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
-            let ret_type = match func.ret_type() {
-                Some(type_ref) => self.lower_type(&type_ref),
-                None => HirType::Void,
-            };
-            let mut params = Vec::new();
-            if let Some(param_list) = func.param_list() {
-                for param in param_list.params() {
-                    if let (Some(p_name), Some(p_ty_ref)) = (param.name(), param.ty()) {
-                        let p_ty = self.lower_type(&p_ty_ref);
-                        params.push((p_name, p_ty));
-                    }
-                }
+            self.generic_templates.funcs.insert(name.clone(), func.clone());
+            if func.generic_params().is_none() {
+                self.request_monomorphize_func(&name, Vec::new());
             }
-            self.functions.insert(name, (params, ret_type));
         }
 
-        // Pass 2: Lower bodies
+        // TODO: Traits and Impls
+
+        // Process worklists until empty
         let mut functions = Vec::new();
-        for func in source_file.functions() {
-            if let Some(f) = self.lower_func(&func) {
-                functions.push(f);
+
+        loop {
+            if let Some((name, args)) = self.struct_worklist.pop() {
+                if let Some(s) = self.generic_templates.structs.get(&name).cloned() {
+                    self.type_env.clear();
+                    if let Some(params) = s.generic_params() {
+                        for (param, arg) in params.params().zip(args.iter()) {
+                            self.type_env.insert(param.as_string().unwrap_or_default(), arg.clone());
+                        }
+                    }
+                    
+                    let mut fields = Vec::new();
+                    for f in s.fields() {
+                        if let (Some(f_name), Some(f_ty_ref)) = (f.name(), f.ty()) {
+                            let f_ty = self.lower_type(&f_ty_ref);
+                            fields.push((f_name.text().to_string(), f_ty));
+                        }
+                    }
+                    let mono_name = if args.is_empty() { name } else { format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_")) };
+                    self.structs.insert(mono_name, fields);
+                }
+                continue;
             }
+
+            if let Some((name, args)) = self.enum_worklist.pop() {
+                if let Some(e) = self.generic_templates.enums.get(&name).cloned() {
+                    let mut variants = Vec::new();
+                    for v in e.variants() {
+                        if let Some(v_name) = v.name() {
+                            variants.push(v_name.text().to_string());
+                        }
+                    }
+                    let mono_name = if args.is_empty() { name } else { format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_")) };
+                    self.enums.insert(mono_name, variants);
+                }
+                continue;
+            }
+
+            if let Some((name, args)) = self.variant_worklist.pop() {
+                if let Some(v) = self.generic_templates.variants.get(&name).cloned() {
+                    self.type_env.clear();
+                    if let Some(params) = v.generic_params() {
+                        for (param, arg) in params.params().zip(args.iter()) {
+                            self.type_env.insert(param.as_string().unwrap_or_default(), arg.clone());
+                        }
+                    }
+                    
+                    let mut cases = Vec::new();
+                    for case in v.cases() {
+                        let case_name = case.name().map(|n| n.text().to_string()).unwrap_or_default();
+                        let mut payload_tys = Vec::new();
+                        for ty_ref in case.types() {
+                            payload_tys.push(self.lower_type(&ty_ref));
+                        }
+                        cases.push((case_name, payload_tys));
+                    }
+                    let mono_name = if args.is_empty() { name } else { format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_")) };
+                    self.variants.insert(mono_name, cases);
+                }
+                continue;
+            }
+
+            if let Some((name, args)) = self.func_worklist.pop() {
+                if let Some(func) = self.generic_templates.funcs.get(&name).cloned() {
+                    self.type_env.clear();
+                    if let Some(params) = func.generic_params() {
+                        for (param, arg) in params.params().zip(args.iter()) {
+                            self.type_env.insert(param.as_string().unwrap_or_default(), arg.clone());
+                        }
+                    }
+                    
+                    let mono_name = if args.is_empty() { name.clone() } else { format!("{}_{}", name, args.iter().map(ty_to_string).collect::<Vec<_>>().join("_")) };
+                    
+                    // The signature was already computed and stored by request_monomorphize_func
+                    if let Some((params_list, ret_type)) = self.functions.get(&mono_name).cloned() {
+                        // Now lower the body
+                        if let Some(f) = self.lower_func_mono(&func, &mono_name, params_list, ret_type) {
+                            functions.push(f);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            break;
         }
+
         HirProgram {
             structs: self.structs.clone(),
             enums: self.enums.clone(),
@@ -182,23 +390,12 @@ impl LoweringContext {
         }
     }
 
-    fn lower_func(&mut self, func: &ast::FuncDecl) -> Option<HirFunc> {
-        let name = func.name()?.text().to_string();
-        
-        let ret_type = match func.ret_type() {
-            Some(type_ref) => self.lower_type(&type_ref),
-            None => HirType::Void,
-        };
-
+    fn lower_func_mono(&mut self, func: &ast::FuncDecl, mono_name: &str, params: Vec<(String, HirType)>, ret_type: HirType) -> Option<HirFunc> {
         self.enter_scope(); // Function scope
         self.current_func_ret_type = ret_type.clone();
 
-        let mut params = Vec::new();
-        if let Some((sig_params, _)) = self.functions.get(&name) {
-            params = sig_params.clone();
-            for (p_name, p_ty) in &params {
-                self.declare_var(p_name.clone(), p_ty.clone(), false);
-            }
+        for (p_name, p_ty) in &params {
+            self.declare_var(p_name.clone(), p_ty.clone(), false);
         }
 
         // Spec clauses (requires/ensures) are lowered AFTER entering scope and declaring
@@ -227,7 +424,7 @@ impl LoweringContext {
         self.current_func_ret_type = HirType::Void;
 
         Some(HirFunc {
-            name,
+            name: mono_name.to_string(),
             params,
             ret_type,
             body,
@@ -289,19 +486,51 @@ impl LoweringContext {
         }
 
         let name = type_ref.as_string().unwrap_or_default();
+        if let Some(ty) = self.type_env.get(&name) {
+            return ty.clone();
+        }
+
         match name.as_str() {
             "i32" => HirType::I32,
             "bool" => HirType::Bool,
             "" => HirType::Error,
             _ => {
-                if self.structs.contains_key(&name) {
-                    HirType::Struct(name)
-                } else if self.enums.contains_key(&name) {
-                    HirType::Enum(name)
+                if let Some(generic_args) = type_ref.generic_args() {
+                    let mut args = Vec::new();
+                    for arg in generic_args.args() {
+                        args.push(self.lower_type(&arg));
+                    }
+                    if self.generic_templates.structs.contains_key(&name) {
+                        let mono_name = self.request_monomorphize_struct(&name, args);
+                        return HirType::Struct(mono_name);
+                    } else if self.generic_templates.enums.contains_key(&name) {
+                        let mono_name = self.request_monomorphize_enum(&name, args);
+                        return HirType::Enum(mono_name);
+                    }
+                }
+
+                if self.structs.contains_key(&name) || self.generic_templates.structs.contains_key(&name) {
+                    if self.generic_templates.structs.contains_key(&name) && type_ref.generic_args().is_none() {
+                        // Needs generic arguments! We should probably throw an error, but let's just request with empty args if they have defaults, or we just pass empty args and fail later if it expects some.
+                        // Actually, if it's a generic struct, it must have arguments unless we infer them. 
+                        // But wait! If we are inside the template itself, `Point` refers to `Point<T>`.
+                        // Let's just request monomorphization with empty args for now.
+                        let mono_name = self.request_monomorphize_struct(&name, Vec::new());
+                        HirType::Struct(mono_name)
+                    } else {
+                        HirType::Struct(name)
+                    }
+                } else if self.enums.contains_key(&name) || self.generic_templates.enums.contains_key(&name) {
+                    if self.generic_templates.enums.contains_key(&name) && type_ref.generic_args().is_none() {
+                        let mono_name = self.request_monomorphize_enum(&name, Vec::new());
+                        HirType::Enum(mono_name)
+                    } else {
+                        HirType::Enum(name)
+                    }
                 } else if self.variants.contains_key(&name) {
                     HirType::Variant(name)
                 } else {
-                    self.errors.push(SemanticError::UnknownType { name });
+                    self.errors.push(SemanticError::UnknownType { name: name.clone() });
                     HirType::Error
                 }
             }
@@ -576,6 +805,25 @@ impl LoweringContext {
                         } else if self.functions.contains_key(&name) {
                             is_direct = true;
                             direct_name = name.clone();
+                        } else if self.generic_templates.funcs.contains_key(&name) {
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name) });
+                        }
+                    } else if let ast::Expr::GenericInstExpr(gen_inst) = &callee_ast {
+                        if let Some(ast::Expr::NameRef(name_ref)) = gen_inst.expr() {
+                            let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
+                            if self.generic_templates.funcs.contains_key(&name) {
+                                if let Some(generic_args) = gen_inst.generic_args() {
+                                    let mut args = Vec::new();
+                                    for arg in generic_args.args() {
+                                        args.push(self.lower_type(&arg));
+                                    }
+                                    let mono_name = self.request_monomorphize_func(&name, args);
+                                    is_direct = true;
+                                    direct_name = mono_name;
+                                }
+                            } else {
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("undefined generic function {}", name) });
+                            }
                         }
                     }
                     
@@ -999,6 +1247,10 @@ impl LoweringContext {
                 
                 let closure_ty = HirType::Func(param_tys, Box::new(ret_ty));
                 HirExpr::Closure(params, Box::new(body), captured_vars, closure_ty)
+            }
+            ast::Expr::GenericInstExpr(_expr) => {
+                // TODO: Implement generic instantiation monomorphization
+                HirExpr::Error
             }
         }
     }

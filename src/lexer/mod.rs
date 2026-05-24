@@ -93,6 +93,7 @@ pub enum Token {
     #[token(".")] Dot,
     #[token(",")] Comma,
     #[token(":")] Colon,
+    #[token("::")] ColonColon,
     #[token(";")] Semi,
     #[token("(")] LParen,
     #[token(")")] RParen,

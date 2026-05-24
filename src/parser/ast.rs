@@ -42,6 +42,10 @@ ast_node!(BlockExpr, SyntaxKind::BLOCK_EXPR);
 ast_node!(StructDecl, SyntaxKind::STRUCT_DECL);
 ast_node!(FieldDeclList, SyntaxKind::FIELD_DECL_LIST);
 ast_node!(FieldDecl, SyntaxKind::FIELD_DECL);
+ast_node!(TraitDecl, SyntaxKind::TRAIT_DECL);
+ast_node!(ImplDecl, SyntaxKind::IMPL_DECL);
+ast_node!(GenericParams, SyntaxKind::GENERIC_PARAMS);
+ast_node!(GenericArgs, SyntaxKind::GENERIC_ARGS);
 
 // Statements
 ast_node!(ReturnStmt, SyntaxKind::RETURN_STMT);
@@ -71,6 +75,7 @@ ast_node!(RefExpr, SyntaxKind::REF_EXPR);
 ast_node!(DerefExpr, SyntaxKind::DEREF_EXPR);
 ast_node!(UnsafeBlock, SyntaxKind::UNSAFE_BLOCK);
 ast_node!(ClosureExpr, SyntaxKind::CLOSURE_EXPR);
+ast_node!(GenericInstExpr, SyntaxKind::GENERIC_INST_EXPR);
 
 ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
 ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
@@ -149,11 +154,15 @@ pub enum Expr {
     DerefExpr(DerefExpr),
     UnsafeBlock(UnsafeBlock),
     ClosureExpr(ClosureExpr),
+    GenericInstExpr(GenericInstExpr),
 }
 
 impl Expr {
     pub fn cast(node: SyntaxNode) -> Option<Self> {
         match node.kind() {
+            SyntaxKind::ARRAY_EXPR => ArrayExpr::cast(node).map(Expr::ArrayExpr),
+            SyntaxKind::INDEX_EXPR => IndexExpr::cast(node).map(Expr::IndexExpr),
+            SyntaxKind::SLICE_EXPR => SliceExpr::cast(node).map(Expr::SliceExpr),
             SyntaxKind::BIN_EXPR => BinExpr::cast(node).map(Expr::BinExpr),
             SyntaxKind::PREFIX_EXPR => PrefixExpr::cast(node).map(Expr::PrefixExpr),
             SyntaxKind::IF_EXPR => IfExpr::cast(node).map(Expr::IfExpr),
@@ -163,14 +172,12 @@ impl Expr {
             SyntaxKind::STRUCT_EXPR => StructExpr::cast(node).map(Expr::StructExpr),
             SyntaxKind::FIELD_EXPR => FieldExpr::cast(node).map(Expr::FieldExpr),
             SyntaxKind::MATCH_EXPR => MatchExpr::cast(node).map(Expr::MatchExpr),
-            SyntaxKind::ARRAY_EXPR => ArrayExpr::cast(node).map(Expr::ArrayExpr),
-            SyntaxKind::INDEX_EXPR => IndexExpr::cast(node).map(Expr::IndexExpr),
-            SyntaxKind::SLICE_EXPR => SliceExpr::cast(node).map(Expr::SliceExpr),
             SyntaxKind::TRY_EXPR => TryExpr::cast(node).map(Expr::TryExpr),
             SyntaxKind::REF_EXPR => RefExpr::cast(node).map(Expr::RefExpr),
             SyntaxKind::DEREF_EXPR => DerefExpr::cast(node).map(Expr::DerefExpr),
             SyntaxKind::UNSAFE_BLOCK => UnsafeBlock::cast(node).map(Expr::UnsafeBlock),
             SyntaxKind::CLOSURE_EXPR => ClosureExpr::cast(node).map(Expr::ClosureExpr),
+            SyntaxKind::GENERIC_INST_EXPR => GenericInstExpr::cast(node).map(Expr::GenericInstExpr),
             _ => None,
         }
     }
@@ -191,6 +198,12 @@ impl SourceFile {
     pub fn variants(&self) -> impl Iterator<Item = VariantDecl> {
         self.syntax().children().filter_map(VariantDecl::cast)
     }
+    pub fn traits(&self) -> impl Iterator<Item = TraitDecl> {
+        self.syntax().children().filter_map(TraitDecl::cast)
+    }
+    pub fn impls(&self) -> impl Iterator<Item = ImplDecl> {
+        self.syntax().children().filter_map(ImplDecl::cast)
+    }
 }
 
 impl FuncDecl {
@@ -199,6 +212,10 @@ impl FuncDecl {
             .children_with_tokens()
             .filter_map(|it| it.into_token())
             .find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.syntax().children().find_map(GenericParams::cast)
     }
     
     pub fn param_list(&self) -> Option<ParamList> {
@@ -248,6 +265,10 @@ impl TypeRef {
             .filter_map(|it| it.into_token())
             .find(|it| !matches!(it.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment))
             .map(|it| it.text().to_string())
+    }
+    
+    pub fn generic_args(&self) -> Option<GenericArgs> {
+        self.syntax().children().find_map(GenericArgs::cast)
     }
 }
 
@@ -449,6 +470,9 @@ impl StructDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
     }
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.syntax().children().find_map(GenericParams::cast)
+    }
     pub fn fields(&self) -> impl Iterator<Item = FieldDecl> {
         self.syntax().children().find_map(FieldDeclList::cast)
             .into_iter()
@@ -623,9 +647,64 @@ impl ForStmt {
 impl BreakStmt {}
 impl ContinueStmt {}
 
+impl TraitDecl {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.syntax().children().find_map(GenericParams::cast)
+    }
+    pub fn functions(&self) -> impl Iterator<Item = FuncDecl> {
+        self.syntax().children().filter_map(FuncDecl::cast)
+    }
+}
+
+impl ImplDecl {
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.syntax().children().find_map(GenericParams::cast)
+    }
+    pub fn trait_type(&self) -> Option<TypeRef> {
+        // First TypeRef is either trait or target if no trait
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+    pub fn target_type(&self) -> Option<TypeRef> {
+        // Second TypeRef if For exists
+        let mut types = self.syntax().children().filter_map(TypeRef::cast);
+        types.next();
+        types.next()
+    }
+    pub fn functions(&self) -> impl Iterator<Item = FuncDecl> {
+        self.syntax().children().filter_map(FuncDecl::cast)
+    }
+}
+
+impl GenericParams {
+    pub fn params(&self) -> impl Iterator<Item = TypeRef> {
+        self.syntax().children().filter_map(TypeRef::cast)
+    }
+}
+
+impl GenericArgs {
+    pub fn args(&self) -> impl Iterator<Item = TypeRef> {
+        self.syntax().children().filter_map(TypeRef::cast)
+    }
+}
+
+impl GenericInstExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    pub fn generic_args(&self) -> Option<GenericArgs> {
+        self.syntax().children().find_map(GenericArgs::cast)
+    }
+}
+
 impl EnumDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.syntax().children().find_map(GenericParams::cast)
     }
     pub fn variants(&self) -> impl Iterator<Item = EnumVariant> {
         self.syntax().children().filter_map(EnumVariant::cast)
@@ -641,6 +720,9 @@ impl EnumVariant {
 impl VariantDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.syntax().children().find_map(GenericParams::cast)
     }
     pub fn cases(&self) -> impl Iterator<Item = VariantCase> {
         self.syntax().children().filter_map(VariantCase::cast)

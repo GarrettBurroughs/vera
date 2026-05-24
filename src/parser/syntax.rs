@@ -18,7 +18,7 @@ pub enum SyntaxKind {
     
     Eq, EqEq, BangEq, Less, Greater, LessEq, GreaterEq, Plus, Minus,
     Star, Slash, Percent, Bang, Amp, AmpAmp, PipePipe, Implies, Iff,
-    DotDot, FatArrow, Question, Dot, Comma, Colon, Semi,
+    DotDot, FatArrow, Question, Dot, Comma, Colon, ColonColon, Semi,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket, Pipe, Arrow, At,
     
     BoolTrue, BoolFalse, Ident, IntLit, FloatLit, StringLit,
@@ -82,6 +82,11 @@ pub enum SyntaxKind {
     REF_TYPE,
     FUNC_TYPE,
     CLOSURE_EXPR,
+    TRAIT_DECL,
+    IMPL_DECL,
+    GENERIC_PARAMS,
+    GENERIC_ARGS,
+    GENERIC_INST_EXPR,
     ERROR_NODE,
 }
 
@@ -172,6 +177,7 @@ impl From<Token> for SyntaxKind {
             Token::Dot => SyntaxKind::Dot,
             Token::Comma => SyntaxKind::Comma,
             Token::Colon => SyntaxKind::Colon,
+            Token::ColonColon => SyntaxKind::ColonColon,
             Token::Semi => SyntaxKind::Semi,
             Token::LParen => SyntaxKind::LParen,
             Token::RParen => SyntaxKind::RParen,
