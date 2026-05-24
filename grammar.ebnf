@@ -92,7 +92,8 @@ primary_expr    = identifier
                 | if_expr 
                 | match_expr 
                 | unsafe_block
-                | closure_expr ;
+                | closure_expr
+                | struct_expr ;
 
 args            = expr { "," expr } ;
 if_expr         = "if" expr block [ "else" ( if_expr | block ) ] ;
@@ -100,6 +101,8 @@ match_expr      = "match" expr "{" { match_case "," } [ match_case ] "}" ;
 match_case      = "case" pattern "=>" ( expr | block ) ;
 unsafe_block    = "unsafe" block ;
 closure_expr    = "|" identifier_list "|" expr ;
+struct_expr     = identifier "{" [ struct_field { "," struct_field } [ "," ] ] "}" ;
+struct_field    = identifier ":" expr ;
 
 /* Verification and Specifications */
 spec_block      = "spec" "{" { spec_stmt } "}" ;

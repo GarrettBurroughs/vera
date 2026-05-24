@@ -38,6 +38,11 @@ ast_node!(Param, SyntaxKind::PARAM);
 ast_node!(TypeRef, SyntaxKind::TYPE_REF);
 ast_node!(BlockExpr, SyntaxKind::BLOCK_EXPR);
 
+// Structs
+ast_node!(StructDecl, SyntaxKind::STRUCT_DECL);
+ast_node!(FieldDeclList, SyntaxKind::FIELD_DECL_LIST);
+ast_node!(FieldDecl, SyntaxKind::FIELD_DECL);
+
 // Statements
 ast_node!(ReturnStmt, SyntaxKind::RETURN_STMT);
 ast_node!(LetStmt, SyntaxKind::LET_STMT);
@@ -52,6 +57,11 @@ ast_node!(Condition, SyntaxKind::CONDITION);
 ast_node!(Literal, SyntaxKind::LITERAL);
 ast_node!(CallExpr, SyntaxKind::CALL_EXPR);
 ast_node!(ArgList, SyntaxKind::ARG_LIST);
+
+ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
+ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
+ast_node!(StructExprField, SyntaxKind::STRUCT_EXPR_FIELD);
+ast_node!(FieldExpr, SyntaxKind::FIELD_EXPR);
 
 ast_node!(SpecBlock, SyntaxKind::SPEC_BLOCK);
 ast_node!(RequiresClause, SyntaxKind::REQUIRES_CLAUSE);
@@ -91,6 +101,8 @@ pub enum Expr {
     NameRef(NameRef),
     Literal(Literal),
     CallExpr(CallExpr),
+    StructExpr(StructExpr),
+    FieldExpr(FieldExpr),
 }
 
 impl Expr {
@@ -102,6 +114,8 @@ impl Expr {
             SyntaxKind::NAME_REF => NameRef::cast(node).map(Expr::NameRef),
             SyntaxKind::LITERAL => Literal::cast(node).map(Expr::Literal),
             SyntaxKind::CALL_EXPR => CallExpr::cast(node).map(Expr::CallExpr),
+            SyntaxKind::STRUCT_EXPR => StructExpr::cast(node).map(Expr::StructExpr),
+            SyntaxKind::FIELD_EXPR => FieldExpr::cast(node).map(Expr::FieldExpr),
             _ => None,
         }
     }
@@ -112,6 +126,9 @@ impl Expr {
 impl SourceFile {
     pub fn functions(&self) -> impl Iterator<Item = FuncDecl> {
         self.syntax().children().filter_map(FuncDecl::cast)
+    }
+    pub fn structs(&self) -> impl Iterator<Item = StructDecl> {
+        self.syntax().children().filter_map(StructDecl::cast)
     }
 }
 
@@ -297,6 +314,62 @@ impl ReturnStmt {
         self.syntax().children().find_map(Expr::cast)
     }
 }
+
+// Struct implementations
+
+impl StructDecl {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn fields(&self) -> impl Iterator<Item = FieldDecl> {
+        self.syntax().children().find_map(FieldDeclList::cast)
+            .into_iter()
+            .flat_map(|list| list.syntax().children().filter_map(FieldDecl::cast))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
+impl FieldDecl {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+}
+
+impl StructExpr {
+    pub fn name(&self) -> Option<NameRef> {
+        self.syntax().children().find_map(NameRef::cast)
+    }
+    pub fn fields(&self) -> impl Iterator<Item = StructExprField> {
+        self.syntax().children().find_map(StructExprFieldList::cast)
+            .into_iter()
+            .flat_map(|list| list.syntax().children().filter_map(StructExprField::cast))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
+impl StructExprField {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
+impl FieldExpr {
+    pub fn base(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    pub fn field(&self) -> Option<NameRef> {
+        self.syntax().children().filter_map(NameRef::cast).last()
+    }
+}
+
 
 impl SpecBlock {
     pub fn requires_clauses(&self) -> impl Iterator<Item = RequiresClause> {

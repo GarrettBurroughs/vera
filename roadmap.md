@@ -39,7 +39,7 @@ This document outlines the macro-level phases required to build the complete Ver
 ## Comprehensive Todo List
 
 ### 1. Language Constructs & Type System
-- [ ] **Structs**: Memory layout rules (C ABI), field access, instantiation.
+- [x] **Structs**: Memory layout rules (C ABI), field access, instantiation.
 - [ ] **Enums & Variants**: Tagged unions, C ABI `@abi(C)` generation, `match` expressions.
 - [ ] **Arrays & Slices**: Compile-time arrays (`array[T, N]`), slices (`slice[T]`, `mut slice[T]`), fat pointer layouts.
 - [ ] **Pointers & References**: Safe references (`ref T`, `mut ref T`), raw pointers (`ptr T`, `mut ptr T`), dereferencing (`*x`).

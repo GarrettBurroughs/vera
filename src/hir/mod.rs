@@ -11,6 +11,7 @@ pub enum HirType {
 
 #[derive(Debug, Clone)]
 pub struct HirProgram {
+    pub structs: std::collections::BTreeMap<String, Vec<(String, HirType)>>,
     pub functions: Vec<HirFunc>,
 }
 
@@ -60,6 +61,8 @@ pub enum HirExpr {
     VarRef(String, HirType),
     Call(String, Vec<HirExpr>, HirType),
     If(Box<HirExpr>, HirBlock, Option<HirBlock>, HirType),
+    StructExpr(String, Vec<(String, HirExpr)>, HirType),
+    FieldAccess(Box<HirExpr>, String, HirType),
     Error,
 }
 
@@ -73,6 +76,8 @@ impl HirExpr {
             HirExpr::VarRef(_, ty) => ty.clone(),
             HirExpr::Call(_, _, ty) => ty.clone(),
             HirExpr::If(_, _, _, ty) => ty.clone(),
+            HirExpr::StructExpr(_, _, ty) => ty.clone(),
+            HirExpr::FieldAccess(_, _, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
     }

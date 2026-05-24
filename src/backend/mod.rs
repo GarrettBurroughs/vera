@@ -13,6 +13,8 @@ struct CodeGen<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     scopes: Vec<BTreeMap<String, (PointerValue<'ctx>, HirType)>>,
+    struct_layouts: BTreeMap<String, Vec<(String, HirType)>>,
+    structs: BTreeMap<String, inkwell::types::StructType<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -29,7 +31,13 @@ impl<'ctx> CodeGen<'ctx> {
             HirType::Ref(_) => {
                 Ok(self.context.ptr_type(inkwell::AddressSpace::default()).into())
             }
-            // For now, struct returns an error or dummy
+            HirType::Struct(name) => {
+                if let Some(struct_ty) = self.structs.get(name) {
+                    Ok((*struct_ty).into())
+                } else {
+                    Err(format!("Struct type not found: {}", name))
+                }
+            }
             _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
         }
     }
@@ -278,6 +286,33 @@ impl<'ctx> CodeGen<'ctx> {
                     inkwell::values::ValueKind::Instruction(_) => Err("Call returned void".into()),
                 }
             }
+            HirExpr::StructExpr(name, fields, _) => {
+                let struct_type = *self.structs.get(name).unwrap();
+                let alloca = self.builder.build_alloca(struct_type, "struct_init").unwrap();
+                
+                for (f_name, f_expr) in fields {
+                    let layout = self.struct_layouts.get(name).unwrap();
+                    let field_idx = layout.iter().position(|(n, _)| n == f_name).unwrap();
+                    
+                    let field_val = self.compile_expr(f_expr)?;
+                    let field_ptr = self.builder.build_struct_gep(struct_type, alloca, field_idx as u32, "field_ptr").unwrap();
+                    self.builder.build_store(field_ptr, field_val).unwrap();
+                }
+                
+                let val = self.builder.build_load(struct_type, alloca, "struct_val").unwrap();
+                Ok(val)
+            }
+            HirExpr::FieldAccess(base, field_name, _) => {
+                let base_ty = base.ty();
+                let struct_name = if let HirType::Struct(s) = base_ty { s } else { unreachable!() };
+                
+                let base_val = self.compile_expr(base)?;
+                let layout = self.struct_layouts.get(&struct_name).unwrap();
+                let field_idx = layout.iter().position(|(n, _)| n == field_name).unwrap();
+                
+                let res = self.builder.build_extract_value(base_val.into_struct_value(), field_idx as u32, "extract").unwrap();
+                Ok(res)
+            }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
     }
@@ -293,7 +328,25 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         module,
         builder,
         scopes: Vec::new(),
+        struct_layouts: hir.structs.clone(),
+        structs: BTreeMap::new(),
     };
+    
+    // Predeclare structs
+    for (name, _) in &hir.structs {
+        let struct_type = codegen.context.opaque_struct_type(name);
+        codegen.structs.insert(name.clone(), struct_type);
+    }
+
+    // Define structs
+    for (name, fields) in &hir.structs {
+        let mut field_types = Vec::new();
+        for (_, ty) in fields {
+            field_types.push(codegen.lower_type(ty).unwrap());
+        }
+        let struct_type = codegen.structs.get(name).unwrap();
+        struct_type.set_body(&field_types, false);
+    }
     
     for func in &hir.functions {
         codegen.declare_func(func)?;

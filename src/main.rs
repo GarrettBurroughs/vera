@@ -26,7 +26,7 @@ struct Cli {
     opt_level: Option<String>,
 
     #[arg(long)]
-    no_verify: bool,
+    verify: bool,
 
     #[arg(long)]
     solver: Option<String>,
@@ -61,7 +61,7 @@ enum Commands {
 }
 
 fn setup_logging(cli: &Cli) {
-    let filter = EnvFilter::new(format!("vera={}", cli.log_level));
+    let filter = EnvFilter::new(format!("verify={}", cli.log_level));
     
     if let Some(ref file_path) = cli.log_file {
         let file = std::fs::File::create(file_path).expect("Failed to create log file");
@@ -116,14 +116,14 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         return Err(());
     }
     
-    if !cli.no_verify {
+    if cli.verify {
         info!("Running verification pipeline");
         if let Err(e) = verification::verify_program(&hir_program) {
             error!("Verification Error: {:?}", e);
             return Err(());
         }
     } else {
-        warn!("Verification skipped due to --no-verify flag");
+        warn!("Verification skipped (use --verify to enable)");
     }
     
     if is_check {

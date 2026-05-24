@@ -35,6 +35,7 @@ mod tests {
                     let status = Command::new("cargo")
                         .arg("run")
                         .arg("--")
+                        .arg("--verify")
                         .arg("run")
                         .arg(&path)
                         .status()

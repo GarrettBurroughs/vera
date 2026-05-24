@@ -49,6 +49,7 @@ pub struct LoweringContext {
     pub errors: Vec<SemanticError>,
     scopes: Vec<Scope>,
     pub functions: BTreeMap<String, (Vec<(String, HirType)>, HirType)>, // name -> (params, ret_ty)
+    pub structs: BTreeMap<String, Vec<(String, HirType)>>, // name -> fields
     current_func_ret_type: HirType,
 }
 
@@ -58,6 +59,7 @@ impl LoweringContext {
             errors: Vec::new(),
             scopes: Vec::new(),
             functions: BTreeMap::new(),
+            structs: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
         }
     }
@@ -86,6 +88,19 @@ impl LoweringContext {
     }
 
     pub fn lower_program(&mut self, source_file: &ast::SourceFile) -> HirProgram {
+        // Pass 0: Gather structs
+        for s in source_file.structs() {
+            let name = s.name().map(|n| n.text().to_string()).unwrap_or_default();
+            let mut fields = Vec::new();
+            for f in s.fields() {
+                if let (Some(f_name), Some(f_ty_ref)) = (f.name(), f.ty()) {
+                    let f_ty = self.lower_type(&f_ty_ref);
+                    fields.push((f_name.text().to_string(), f_ty));
+                }
+            }
+            self.structs.insert(name, fields);
+        }
+
         // Pass 1: Gather signatures
         for func in source_file.functions() {
             let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
@@ -112,7 +127,7 @@ impl LoweringContext {
                 functions.push(f);
             }
         }
-        HirProgram { functions }
+        HirProgram { structs: self.structs.clone(), functions }
     }
 
     fn lower_func(&mut self, func: &ast::FuncDecl) -> Option<HirFunc> {
@@ -175,8 +190,12 @@ impl LoweringContext {
             "bool" => HirType::Bool,
             "" => HirType::Error,
             _ => {
-                self.errors.push(SemanticError::UnknownType { name });
-                HirType::Error
+                if self.structs.contains_key(&name) {
+                    HirType::Struct(name)
+                } else {
+                    self.errors.push(SemanticError::UnknownType { name });
+                    HirType::Error
+                }
             }
         }
     }
@@ -405,6 +424,57 @@ impl LoweringContext {
             }
             ast::Expr::IfExpr(if_expr) => {
                 self.lower_if_expr(if_expr)
+            }
+            ast::Expr::StructExpr(struct_expr) => {
+                let name = struct_expr.name().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
+                let mut field_exprs = Vec::new();
+                for f in struct_expr.fields() {
+                    let f_name = f.name().map(|n| n.text().to_string()).unwrap_or_default();
+                    let f_expr = f.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                    field_exprs.push((f_name, f_expr));
+                }
+                
+                if let Some(def_fields) = self.structs.get(&name) {
+                    // Type check fields
+                    for (f_name, f_expr) in &field_exprs {
+                        if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == f_name) {
+                            if f_expr.ty() != HirType::Error && *def_ty != f_expr.ty() {
+                                self.errors.push(SemanticError::TypeMismatch {
+                                    expected: def_ty.clone(),
+                                    found: f_expr.ty(),
+                                });
+                            }
+                        } else {
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, name) });
+                        }
+                    }
+                    HirExpr::StructExpr(name.clone(), field_exprs, HirType::Struct(name))
+                } else {
+                    self.errors.push(SemanticError::UnknownType { name: name.clone() });
+                    HirExpr::Error
+                }
+            }
+            ast::Expr::FieldExpr(field_expr) => {
+                let base = field_expr.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
+                
+                if let HirType::Struct(s_name) = base.ty() {
+                    if let Some(def_fields) = self.structs.get(&s_name) {
+                        if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == &field_name) {
+                            HirExpr::FieldAccess(Box::new(base), field_name, def_ty.clone())
+                        } else {
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", field_name, s_name) });
+                            HirExpr::Error
+                        }
+                    } else {
+                        HirExpr::Error
+                    }
+                } else if base.ty() != HirType::Error {
+                    self.errors.push(SemanticError::UndefinedVariable { name: format!("field access on non-struct type {:?}", base.ty()) });
+                    HirExpr::Error
+                } else {
+                    HirExpr::Error
+                }
             }
         }
     }

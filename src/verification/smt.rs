@@ -1,5 +1,25 @@
+use std::path::PathBuf;
 use std::process::Command;
 use super::VerificationError;
+
+/// Returns the path to the z3 binary.
+///
+/// Resolution order:
+///   1. `<project root>/tools/z3/bin/z3`  (installed via scripts/install_z3.sh)
+///   2. `z3` on the system PATH
+fn z3_path() -> PathBuf {
+    // Walk up from the compiled binary's location to find the repo root.
+    // At test/run time this is typically the cargo workspace root.
+    let local = {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("tools/z3/bin/z3");
+        p
+    };
+    if local.exists() {
+        return local;
+    }
+    PathBuf::from("z3")
+}
 
 #[derive(Debug, Clone)]
 pub enum SmtExpr {
@@ -89,7 +109,7 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
     // Write to a temporary file, or use stdin.
     // For simplicity, we can pass it via stdin to `z3 -in`.
     use std::io::Write;
-    let mut child = Command::new("z3")
+    let mut child = Command::new(z3_path())
         .arg("-in")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

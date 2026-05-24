@@ -45,12 +45,28 @@ impl<'a> Parser<'a> {
         
         self.eat_trivia();
         while self.cursor < self.tokens.len() {
-            // Very simplified parser for Phase 2/3 slice
-            if self.at(SyntaxKind::KwFunc) || self.at(SyntaxKind::KwPub) {
+            let mut peek = self.cursor;
+            while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                peek += 1;
+            }
+            let mut is_pub = false;
+            if peek < self.tokens.len() && self.tokens[peek].0 == SyntaxKind::KwPub {
+                is_pub = true;
+                peek += 1;
+                while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                    peek += 1;
+                }
+            }
+            
+            let kind = if peek < self.tokens.len() { self.tokens[peek].0 } else { SyntaxKind::ErrorToken };
+            
+            if kind == SyntaxKind::KwFunc {
                 self.parse_func();
+            } else if kind == SyntaxKind::KwStruct {
+                self.parse_struct_decl();
             } else {
-                self.error("Expected function declaration");
-                self.advance(); // recover
+                self.error("Expected function or struct declaration");
+                self.advance();
             }
             self.eat_trivia();
         }
@@ -174,7 +190,7 @@ impl<'a> Parser<'a> {
     
     fn parse_type(&mut self) {
         self.start_node(SyntaxKind::TYPE_REF);
-        if self.at(SyntaxKind::TyI32) || self.at(SyntaxKind::TyBool) {
+        if self.at(SyntaxKind::TyI32) || self.at(SyntaxKind::TyBool) || self.at(SyntaxKind::Ident) {
             self.advance();
         } else {
             self.error("Expected type");
@@ -401,34 +417,112 @@ impl<'a> Parser<'a> {
     fn parse_postfix_expr(&mut self) {
         let mut m = self.start();
         self.parse_primary_expr();
-        while self.at(SyntaxKind::LParen) {
-            self.start_node(SyntaxKind::ARG_LIST);
-            self.advance(); // consume LParen
-            if !self.at(SyntaxKind::RParen) {
-                loop {
+        loop {
+            if self.at(SyntaxKind::LParen) {
+                self.start_node(SyntaxKind::ARG_LIST);
+                self.advance(); // consume LParen
+                if !self.at(SyntaxKind::RParen) {
+                    loop {
+                        self.parse_expr();
+                        if self.at(SyntaxKind::Comma) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(SyntaxKind::RParen);
+                self.finish_node(); // finish ARG_LIST
+                let comp = self.complete(m, SyntaxKind::CALL_EXPR);
+                m = self.precede(comp);
+            } else if self.at(SyntaxKind::Dot) {
+                self.advance(); // consume dot
+                self.start_node(SyntaxKind::NAME_REF);
+                self.expect(SyntaxKind::Ident);
+                self.finish_node(); // NAME_REF
+                let comp = self.complete(m, SyntaxKind::FIELD_EXPR);
+                m = self.precede(comp);
+            } else {
+                break;
+            }
+        }
+    }
+    
+    fn parse_struct_decl(&mut self) {
+        self.start_node(SyntaxKind::STRUCT_DECL);
+        
+        if self.at(SyntaxKind::KwPub) {
+            self.advance();
+        }
+        
+        self.expect(SyntaxKind::KwStruct);
+        self.expect(SyntaxKind::Ident);
+        self.expect(SyntaxKind::LBrace);
+        
+        self.start_node(SyntaxKind::FIELD_DECL_LIST);
+        while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+            self.start_node(SyntaxKind::FIELD_DECL);
+            
+            if self.at(SyntaxKind::KwPub) {
+                self.advance();
+            }
+            self.expect(SyntaxKind::Ident);
+            self.expect(SyntaxKind::Colon);
+            self.parse_type();
+            self.finish_node();
+            
+            if self.at(SyntaxKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.finish_node(); // FIELD_DECL_LIST
+        self.expect(SyntaxKind::RBrace);
+        
+        self.finish_node(); // STRUCT_DECL
+    }
+
+    fn parse_primary_expr(&mut self) {
+        if self.at(SyntaxKind::Ident) {
+            // Peek to see if it's a struct expr: Ident {
+            let mut peek = self.cursor + 1;
+            while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                peek += 1;
+            }
+            
+            if peek < self.tokens.len() && self.tokens[peek].0 == SyntaxKind::LBrace {
+                self.start_node(SyntaxKind::STRUCT_EXPR);
+                self.start_node(SyntaxKind::NAME_REF);
+                self.advance(); // Ident
+                self.finish_node(); // NAME_REF
+                
+                self.expect(SyntaxKind::LBrace);
+                self.start_node(SyntaxKind::STRUCT_EXPR_FIELD_LIST);
+                while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+                    self.start_node(SyntaxKind::STRUCT_EXPR_FIELD);
+                    self.expect(SyntaxKind::Ident);
+                    self.expect(SyntaxKind::Colon);
                     self.parse_expr();
+                    self.finish_node(); // STRUCT_EXPR_FIELD
+                    
                     if self.at(SyntaxKind::Comma) {
                         self.advance();
                     } else {
                         break;
                     }
                 }
+                self.finish_node(); // STRUCT_EXPR_FIELD_LIST
+                self.expect(SyntaxKind::RBrace);
+                self.finish_node(); // STRUCT_EXPR
+            } else {
+                self.start_node(SyntaxKind::NAME_REF);
+                self.advance();
+                self.finish_node();
             }
-            self.expect(SyntaxKind::RParen);
-            self.finish_node(); // finish ARG_LIST
-            let comp = self.complete(m, SyntaxKind::CALL_EXPR);
-            m = self.precede(comp);
-        }
-    }
-    
-    fn parse_primary_expr(&mut self) {
-        if self.at(SyntaxKind::Ident) {
-            self.start_node(SyntaxKind::NAME_REF);
-            self.advance();
-            self.finish_node();
         } else if self.at(SyntaxKind::IntLit) || self.at(SyntaxKind::FloatLit) || self.at(SyntaxKind::StringLit) || self.at(SyntaxKind::BoolTrue) || self.at(SyntaxKind::BoolFalse) {
             self.start_node(SyntaxKind::LITERAL);
-            self.advance(); // Tokens are automatically attached as children
+            self.advance();
             self.finish_node();
         } else if self.at(SyntaxKind::LParen) {
             self.advance();
