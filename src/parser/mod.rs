@@ -860,7 +860,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary_expr(&mut self) {
-        if self.at(SyntaxKind::Ident) {
+        if self.at(SyntaxKind::Ident) || self.at(SyntaxKind::TyResult) {
             // Peek to see if it's a struct expr: Ident {
             let mut peek = self.cursor + 1;
             while peek < self.tokens.len() && matches!(self.tokens[peek].0, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
@@ -956,7 +956,7 @@ impl<'a> Parser<'a> {
             self.parse_expr(); // body
             self.finish_node();
         } else {
-            self.error("Expected expression");
+            self.error(&format!("Expected expression, found {:?}", self.tokens.get(self.cursor)));
             self.advance(); // Prevent infinite loop
         }
     }

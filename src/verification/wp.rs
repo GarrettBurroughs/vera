@@ -82,7 +82,39 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
                 }
             wp_eval_expr(expr, "__dummy_expr", post, ensures_wp)
         }
-        HirStmt::While(_, _, _, _decreases) => post,
+        HirStmt::While(cond, body, invariants, _decreases) => {
+            let mut i_expr = SmtExpr::BoolConst(true);
+            for inv in invariants {
+                i_expr = SmtExpr::And(Box::new(i_expr), Box::new(hir_to_smt(inv)));
+            }
+            
+            let mut mod_vars = std::collections::HashSet::new();
+            for s in &body.statements {
+                collect_modified_vars_stmt(s, &mut mod_vars);
+            }
+            
+            let b_expr = hir_to_smt(cond);
+            
+            // compute_block_wp backwards
+            let mut body_wp = i_expr.clone();
+            for s in body.statements.iter().rev() {
+                body_wp = compute_wp(s, body_wp, ensures_wp);
+            }
+            
+            let preservation = SmtExpr::Implies(Box::new(b_expr.clone()), Box::new(body_wp));
+            let exit = SmtExpr::Implies(Box::new(SmtExpr::Not(Box::new(b_expr))), Box::new(post));
+            
+            let mut quantified_body = SmtExpr::Implies(Box::new(i_expr.clone()), Box::new(SmtExpr::And(Box::new(preservation), Box::new(exit))));
+            
+            // Sort to ensure determinism in tests and SMT output
+            let mut mod_vars_sorted: Vec<_> = mod_vars.into_iter().collect();
+            mod_vars_sorted.sort();
+            for v in mod_vars_sorted {
+                quantified_body = SmtExpr::Forall(v, Box::new(quantified_body));
+            }
+            
+            SmtExpr::And(Box::new(i_expr), Box::new(quantified_body))
+        }
         HirStmt::For(_, _, _) => post,
         HirStmt::Break => post,
         HirStmt::Continue => post,
@@ -280,6 +312,83 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
         HirExpr::ResultOk(inner, _) => SmtExpr::FuncCall("mk_ok".to_string(), vec![hir_to_smt(inner)]),
         HirExpr::ResultErr(inner, _) => SmtExpr::FuncCall("mk_err".to_string(), vec![hir_to_smt(inner)]),
         _ => SmtExpr::BoolConst(false), // fallback
+    }
+}
+
+fn collect_modified_vars_stmt(stmt: &HirStmt, vars: &mut std::collections::HashSet<String>) {
+    match stmt {
+        HirStmt::Expr(expr) => collect_modified_vars_expr(expr, vars),
+        HirStmt::While(_, body, _, _) | HirStmt::For(_, _, body) => {
+            for s in &body.statements {
+                collect_modified_vars_stmt(s, vars);
+            }
+        }
+        HirStmt::Let(_, _, _, init) => collect_modified_vars_expr(init, vars),
+        HirStmt::Return(Some(e)) => collect_modified_vars_expr(e, vars),
+        HirStmt::Assert(e) | HirStmt::Assume(e) => collect_modified_vars_expr(e, vars),
+        _ => {}
+    }
+}
+
+fn collect_modified_vars_expr(expr: &HirExpr, vars: &mut std::collections::HashSet<String>) {
+    match expr {
+        HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
+            if let HirExpr::VarRef(name, _) = lhs.as_ref() {
+                vars.insert(name.clone());
+            }
+            collect_modified_vars_expr(rhs, vars);
+        }
+        HirExpr::BinaryOp(_, lhs, rhs, _) => {
+            collect_modified_vars_expr(lhs, vars);
+            collect_modified_vars_expr(rhs, vars);
+        }
+        HirExpr::UnaryOp(_, inner, _) | HirExpr::Ref(inner, _, _) | HirExpr::Deref(inner, _) |
+        HirExpr::Try(inner, _) | HirExpr::ResultOk(inner, _) | HirExpr::ResultErr(inner, _) |
+        HirExpr::FieldAccess(inner, _, _) => {
+            collect_modified_vars_expr(inner, vars);
+        }
+        HirExpr::Call(_, args, _) | HirExpr::VariantConstructor(_, _, args, _) | HirExpr::ArrayExpr(args, _) => {
+            for arg in args {
+                collect_modified_vars_expr(arg, vars);
+            }
+        }
+        HirExpr::CallIndirect(callee, args, _) => {
+            collect_modified_vars_expr(callee, vars);
+            for arg in args {
+                collect_modified_vars_expr(arg, vars);
+            }
+        }
+        HirExpr::If(cond, thn, els, _) => {
+            collect_modified_vars_expr(cond, vars);
+            for s in &thn.statements { collect_modified_vars_stmt(s, vars); }
+            if let Some(e) = els {
+                for s in &e.statements { collect_modified_vars_stmt(s, vars); }
+            }
+        }
+        HirExpr::Match(cond, arms, _) => {
+            collect_modified_vars_expr(cond, vars);
+            for (_, arm) in arms {
+                collect_modified_vars_expr(arm, vars);
+            }
+        }
+        HirExpr::Block(block, _) => {
+            for s in &block.statements { collect_modified_vars_stmt(s, vars); }
+        }
+        HirExpr::IndexExpr(base, idx, _) => {
+            collect_modified_vars_expr(base, vars);
+            collect_modified_vars_expr(idx, vars);
+        }
+        HirExpr::SliceExpr(base, start, end, _) => {
+            collect_modified_vars_expr(base, vars);
+            collect_modified_vars_expr(start, vars);
+            collect_modified_vars_expr(end, vars);
+        }
+        HirExpr::StructExpr(_, fields, _) => {
+            for (_, f) in fields {
+                collect_modified_vars_expr(f, vars);
+            }
+        }
+        _ => {}
     }
 }
 
