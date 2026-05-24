@@ -14,7 +14,7 @@ pub enum SyntaxKind {
     
     TyBool, TyI8, TyI16, TyI32, TyI64, TyU8, TyU16, TyU32, TyU64,
     TyW8, TyW16, TyW32, TyW64, TyF32, TyF64, TyChar, TyVoid, TyString,
-    TyArray, TySlice, TyRef, TyPtr, KwMut,
+    TyArray, TySlice, TyResult, TyRef, TyPtr, KwMut,
     
     Eq, EqEq, BangEq, Less, Greater, LessEq, GreaterEq, Plus, Minus,
     Star, Slash, Percent, Bang, Amp, AmpAmp, PipePipe, Implies, Iff,
@@ -71,8 +71,10 @@ pub enum SyntaxKind {
     ARRAY_EXPR,
     INDEX_EXPR,
     SLICE_EXPR,
+    TRY_EXPR,
     ARRAY_TYPE,
     SLICE_TYPE,
+    RESULT_TYPE,
     POINTER_TYPE,
     REF_TYPE,
     UNSAFE_BLOCK,
@@ -128,6 +130,7 @@ impl From<Token> for SyntaxKind {
             Token::TyString => SyntaxKind::TyString,
             Token::TyArray => SyntaxKind::TyArray,
             Token::TySlice => SyntaxKind::TySlice,
+            Token::TyResult => SyntaxKind::TyResult,
             Token::TyRef => SyntaxKind::TyRef,
             Token::TyPtr => SyntaxKind::TyPtr,
             Token::KwMut => SyntaxKind::KwMut,

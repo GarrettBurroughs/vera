@@ -53,6 +53,7 @@ pub enum Token {
     #[token("string")] TyString,
     #[token("array")] TyArray,
     #[token("slice")] TySlice,
+    #[token("result")] TyResult,
     #[token("ref")] TyRef,
     #[token("ptr")] TyPtr,
     #[token("mut")] KwMut,

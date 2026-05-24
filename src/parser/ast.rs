@@ -54,6 +54,8 @@ ast_node!(IndexExpr, SyntaxKind::INDEX_EXPR);
 ast_node!(SliceExpr, SyntaxKind::SLICE_EXPR);
 ast_node!(ArrayType, SyntaxKind::ARRAY_TYPE);
 ast_node!(SliceType, SyntaxKind::SLICE_TYPE);
+ast_node!(ResultType, SyntaxKind::RESULT_TYPE);
+ast_node!(PointerType, SyntaxKind::POINTER_TYPE);
 ast_node!(BinExpr, SyntaxKind::BIN_EXPR);
 ast_node!(PrefixExpr, SyntaxKind::PREFIX_EXPR);
 ast_node!(IfExpr, SyntaxKind::IF_EXPR);
@@ -62,6 +64,7 @@ ast_node!(Condition, SyntaxKind::CONDITION);
 ast_node!(Literal, SyntaxKind::LITERAL);
 ast_node!(CallExpr, SyntaxKind::CALL_EXPR);
 ast_node!(ArgList, SyntaxKind::ARG_LIST);
+ast_node!(TryExpr, SyntaxKind::TRY_EXPR);
 
 ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
 ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
@@ -125,16 +128,17 @@ impl Stmt {
 pub enum Expr {
     BinExpr(BinExpr),
     PrefixExpr(PrefixExpr),
-    IfExpr(IfExpr),
-    NameRef(NameRef),
-    Literal(Literal),
     CallExpr(CallExpr),
     StructExpr(StructExpr),
     FieldExpr(FieldExpr),
     MatchExpr(MatchExpr),
     ArrayExpr(ArrayExpr),
+    IfExpr(IfExpr),
+    NameRef(NameRef),
+    Literal(Literal),
     IndexExpr(IndexExpr),
     SliceExpr(SliceExpr),
+    TryExpr(TryExpr),
 }
 
 impl Expr {
@@ -152,6 +156,7 @@ impl Expr {
             SyntaxKind::ARRAY_EXPR => ArrayExpr::cast(node).map(Expr::ArrayExpr),
             SyntaxKind::INDEX_EXPR => IndexExpr::cast(node).map(Expr::IndexExpr),
             SyntaxKind::SLICE_EXPR => SliceExpr::cast(node).map(Expr::SliceExpr),
+            SyntaxKind::TRY_EXPR => TryExpr::cast(node).map(Expr::TryExpr),
             _ => None,
         }
     }
@@ -246,7 +251,16 @@ impl SliceType {
         self.syntax().children().find_map(TypeRef::cast)
     }
     pub fn is_mut(&self) -> bool {
-        self.syntax().children_with_tokens().any(|it| it.kind() == SyntaxKind::KwMut)
+        self.syntax().children_with_tokens().any(|t| t.kind() == SyntaxKind::KwMut)
+    }
+}
+
+impl ResultType {
+    pub fn ok_ty(&self) -> Option<TypeRef> {
+        self.syntax().children().filter_map(TypeRef::cast).nth(0)
+    }
+    pub fn err_ty(&self) -> Option<TypeRef> {
+        self.syntax().children().filter_map(TypeRef::cast).nth(1)
     }
 }
 
@@ -278,6 +292,13 @@ impl ArgList {
         self.syntax().children().filter_map(Expr::cast)
     }
 }
+
+impl TryExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+}
+
 
 impl BinExpr {
     pub fn lhs(&self) -> Option<Expr> {

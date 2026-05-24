@@ -238,6 +238,12 @@ impl LoweringContext {
             return HirType::Slice(Box::new(inner_ty));
         }
 
+        if let Some(res) = type_ref.syntax().children().find_map(ast::ResultType::cast) {
+            let ok_ty = res.ok_ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+            let err_ty = res.err_ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+            return HirType::Result(Box::new(ok_ty), Box::new(err_ty));
+        }
+
         let name = type_ref.as_string().unwrap_or_default();
         match name.as_str() {
             "i32" => HirType::I32,
@@ -517,7 +523,14 @@ impl LoweringContext {
                     }
                 } else if let Some(ast::Expr::NameRef(name_ref)) = call_expr.callee() {
                     let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                    let func_info = self.functions.get(&name).cloned();
+                    if name == "Ok" {
+                        let arg = call_expr.arg_list().and_then(|l| l.args().next()).map(|a| self.lower_expr(&a)).unwrap_or(HirExpr::Error);
+                        HirExpr::ResultOk(Box::new(arg), self.current_func_ret_type.clone())
+                    } else if name == "Err" {
+                        let arg = call_expr.arg_list().and_then(|l| l.args().next()).map(|a| self.lower_expr(&a)).unwrap_or(HirExpr::Error);
+                        HirExpr::ResultErr(Box::new(arg), self.current_func_ret_type.clone())
+                    } else {
+                        let func_info = self.functions.get(&name).cloned();
                     if let Some((sig_params, ret_ty)) = func_info {
                         let mut args = Vec::new();
                         if let Some(arg_list) = call_expr.arg_list() {
@@ -535,6 +548,7 @@ impl LoweringContext {
                         self.errors.push(SemanticError::UndefinedVariable { name });
                         HirExpr::Error
                     }
+                    }
                 } else {
                     HirExpr::Error
                 }
@@ -546,7 +560,7 @@ impl LoweringContext {
                 
                 if let Some(tok) = op_tok {
                     use crate::parser::syntax::SyntaxKind::*;
-                    let (op, expected_ty, ret_ty) = match tok.kind() {
+                    let (op, expected_ty, ret_ty): (BinaryOp, HirType, HirType) = match tok.kind() {
                         Plus => (BinaryOp::Add, HirType::I32, HirType::I32),
                         Minus => (BinaryOp::Sub, HirType::I32, HirType::I32),
                         Star => (BinaryOp::Mul, HirType::I32, HirType::I32),
@@ -826,6 +840,19 @@ impl LoweringContext {
                 };
                 
                 HirExpr::SliceExpr(Box::new(base), Box::new(start), Box::new(end), ret_ty)
+            }
+            ast::Expr::TryExpr(try_expr) => {
+                let inner = try_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let ty = inner.ty();
+                let ok_ty = if let HirType::Result(ok, _) = &ty {
+                    *(ok.clone())
+                } else {
+                    if ty != HirType::Error {
+                        self.errors.push(SemanticError::Custom(format!("Cannot use ? operator on non-Result type {:?}", ty)));
+                    }
+                    HirType::Error
+                };
+                HirExpr::Try(Box::new(inner), ok_ty)
             }
         }
     }

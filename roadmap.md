@@ -47,7 +47,7 @@ This document outlines the macro-level phases required to build the complete Ver
 - [ ] **Refinement Types**: Types bounded by predicates (`T where P`), erasure during code generation, type-checking assertion obligations.
 - [ ] **Generics & Traits**: Monomorphization, generic type bounds, traits (`trait`, `impl`).
 - [ ] **Closures & Function Pointers**: `func(...)` types, C ABI fat pointer closure representation (`fn_ptr`, `env`), anonymous closure expressions `|x| expr`.
-- [ ] **Error Handling (`?`)**: Desugaring the `?` operator for `Result[T, E]`, early return paths.
+- [x] **Error Handling (`?`)**: Desugaring the `?` operator for `Result[T, E]`, early return paths.
 - [x] **Loops & Iteration (Part 1)**: `while`, `break`, `continue`.
 - [x] **Loops & Iteration (Part 2)**: `for` loops (requires arrays/slices first).
 - [ ] **Unsafe Blocks**: `unsafe { ... }` scopes for raw pointer manipulations.

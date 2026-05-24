@@ -8,6 +8,7 @@ pub enum HirType {
     Variant(String),
     Array(Box<HirType>, u64),
     Slice(Box<HirType>),
+    Result(Box<HirType>, Box<HirType>),
     Ptr(Box<HirType>),
     Ref(Box<HirType>),
     Error,
@@ -79,6 +80,9 @@ pub enum HirExpr {
     ArrayExpr(Vec<HirExpr>, HirType),
     IndexExpr(Box<HirExpr>, Box<HirExpr>, HirType),
     SliceExpr(Box<HirExpr>, Box<HirExpr>, Box<HirExpr>, HirType), // base, start, end, type
+    Try(Box<HirExpr>, HirType), // inner expr, ok type
+    ResultOk(Box<HirExpr>, HirType), // inner expr, result type
+    ResultErr(Box<HirExpr>, HirType), // inner expr, result type
     Error,
 }
 
@@ -100,6 +104,9 @@ impl HirExpr {
             HirExpr::ArrayExpr(_, ty) => ty.clone(),
             HirExpr::IndexExpr(_, _, ty) => ty.clone(),
             HirExpr::SliceExpr(_, _, _, ty) => ty.clone(),
+            HirExpr::Try(_, ty) => ty.clone(),
+            HirExpr::ResultOk(_, ty) => ty.clone(),
+            HirExpr::ResultErr(_, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
     }
