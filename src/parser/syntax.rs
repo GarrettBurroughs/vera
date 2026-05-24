@@ -69,6 +69,7 @@ pub enum SyntaxKind {
     PATTERN,
     ARRAY_EXPR,
     INDEX_EXPR,
+    SLICE_EXPR,
     ARRAY_TYPE,
     SLICE_TYPE,
     POINTER_TYPE,

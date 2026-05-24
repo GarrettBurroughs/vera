@@ -109,6 +109,23 @@ impl<'a> Parser<'a> {
         }
     }
     
+    fn nth_at(&self, mut n: usize, kind: SyntaxKind) -> bool {
+        let mut cur = self.cursor;
+        while cur < self.tokens.len() {
+            let k = self.tokens[cur].0;
+            if matches!(k, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                cur += 1;
+                continue;
+            }
+            if n == 0 {
+                return k == kind;
+            }
+            n -= 1;
+            cur += 1;
+        }
+        false
+    }
+    
     fn advance(&mut self) {
         self.eat_trivia();
         if self.cursor < self.tokens.len() {
@@ -196,7 +213,36 @@ impl<'a> Parser<'a> {
     
     fn parse_type(&mut self) {
         self.start_node(SyntaxKind::TYPE_REF);
-        if self.at(SyntaxKind::TyI32) || self.at(SyntaxKind::TyBool) || self.at(SyntaxKind::Ident) {
+        
+        if self.at(SyntaxKind::TyArray) {
+            self.start_node(SyntaxKind::ARRAY_TYPE);
+            self.advance();
+            self.expect(SyntaxKind::LBracket);
+            self.parse_type();
+            self.expect(SyntaxKind::Comma);
+            self.parse_expr(); // array size
+            self.expect(SyntaxKind::RBracket);
+            self.finish_node();
+        } else if self.at(SyntaxKind::TySlice) {
+            self.start_node(SyntaxKind::SLICE_TYPE);
+            self.advance();
+            self.expect(SyntaxKind::LBracket);
+            self.parse_type();
+            self.expect(SyntaxKind::RBracket);
+            self.finish_node();
+        } else if self.at(SyntaxKind::KwMut) && self.nth_at(1, SyntaxKind::TySlice) {
+            self.start_node(SyntaxKind::SLICE_TYPE);
+            self.advance(); // mut
+            self.advance(); // slice
+            self.expect(SyntaxKind::LBracket);
+            self.parse_type();
+            self.expect(SyntaxKind::RBracket);
+            self.finish_node();
+        } else if self.at(SyntaxKind::TyI32) || self.at(SyntaxKind::TyBool) || self.at(SyntaxKind::Ident)
+            || self.at(SyntaxKind::TyU64) || self.at(SyntaxKind::TyF32) || self.at(SyntaxKind::TyF64)
+            || self.at(SyntaxKind::TyU32) || self.at(SyntaxKind::TyI64) || self.at(SyntaxKind::TyI16)
+            || self.at(SyntaxKind::TyU16) || self.at(SyntaxKind::TyI8) || self.at(SyntaxKind::TyU8)
+            || self.at(SyntaxKind::TyString) || self.at(SyntaxKind::TyVoid) || self.at(SyntaxKind::TyChar) {
             self.advance();
         } else {
             self.error("Expected type");
@@ -507,6 +553,20 @@ impl<'a> Parser<'a> {
                 self.finish_node(); // NAME_REF
                 let comp = self.complete(m, SyntaxKind::FIELD_EXPR);
                 m = self.precede(comp);
+            } else if self.at(SyntaxKind::LBracket) {
+                self.advance(); // consume [
+                self.parse_expr();
+                if self.at(SyntaxKind::DotDot) {
+                    self.advance(); // consume ..
+                    self.parse_expr();
+                    self.expect(SyntaxKind::RBracket);
+                    let comp = self.complete(m, SyntaxKind::SLICE_EXPR);
+                    m = self.precede(comp);
+                } else {
+                    self.expect(SyntaxKind::RBracket);
+                    let comp = self.complete(m, SyntaxKind::INDEX_EXPR);
+                    m = self.precede(comp);
+                }
             } else {
                 break;
             }
@@ -597,6 +657,19 @@ impl<'a> Parser<'a> {
             self.parse_if_expr();
         } else if self.at(SyntaxKind::KwMatch) {
             self.parse_match_expr();
+        } else if self.at(SyntaxKind::LBracket) {
+            self.start_node(SyntaxKind::ARRAY_EXPR);
+            self.advance(); // consume [
+            while !self.at(SyntaxKind::RBracket) && self.cursor < self.tokens.len() {
+                self.parse_expr();
+                if self.at(SyntaxKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(SyntaxKind::RBracket);
+            self.finish_node();
         } else {
             self.error("Expected expression");
             self.advance(); // Prevent infinite loop
@@ -945,6 +1018,19 @@ mod tests {
     #[test]
     fn test_parse_match_expr() {
         let input = "func main(): i32 { const x: i32 = match opt { case None => 0, case Some(x) => x }; return x; }";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "Expected no parse errors, got {:?}", errors);
+    }
+
+    #[test]
+    fn test_parse_arrays_and_slices() {
+        let input = "
+            func process_data(arr: array[i32, 10], s: slice[u8], m: mut slice[f32]) {
+                const my_arr: array[i32, 3] = [1, 2, 3];
+                const x = my_arr[1];
+                const y = s[0..5];
+            }
+        ";
         let (_, errors) = parse(input);
         assert!(errors.is_empty(), "Expected no parse errors, got {:?}", errors);
     }

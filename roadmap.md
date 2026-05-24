@@ -40,15 +40,16 @@ This document outlines the macro-level phases required to build the complete Ver
 
 ### 1. Language Constructs & Type System
 - [x] **Structs**: Memory layout rules (C ABI), field access, instantiation.
-- [ ] **Enums & Variants**: Tagged unions, C ABI `@abi(C)` generation, `match` expressions.
-- [ ] **Arrays & Slices**: Compile-time arrays (`array[T, N]`), slices (`slice[T]`, `mut slice[T]`), fat pointer layouts.
+- [x] **Enums & Variants**: Tagged unions, C ABI `@abi(C)` generation, `match` expressions.
+- [x] **Arrays & Slices**: Compile-time arrays (`array[T, N]`), slices (`slice[T]`, `mut slice[T]`), fat pointer layouts.
 - [ ] **Pointers & References**: Safe references (`ref T`, `mut ref T`), raw pointers (`ptr T`, `mut ptr T`), dereferencing (`*x`).
 - [ ] **Borrow Checker**: Lifetime tracking, exclusive mutability analysis, non-lexical lifetimes.
 - [ ] **Refinement Types**: Types bounded by predicates (`T where P`), erasure during code generation, type-checking assertion obligations.
 - [ ] **Generics & Traits**: Monomorphization, generic type bounds, traits (`trait`, `impl`).
 - [ ] **Closures & Function Pointers**: `func(...)` types, C ABI fat pointer closure representation (`fn_ptr`, `env`), anonymous closure expressions `|x| expr`.
 - [ ] **Error Handling (`?`)**: Desugaring the `?` operator for `Result[T, E]`, early return paths.
-- [ ] **Loops & Iteration**: `while`, `for`, `break`, `continue`.
+- [x] **Loops & Iteration (Part 1)**: `while`, `break`, `continue`.
+- [ ] **Loops & Iteration (Part 2)**: `for` loops (requires arrays/slices first).
 - [ ] **Unsafe Blocks**: `unsafe { ... }` scopes for raw pointer manipulations.
 
 ### 2. Verification & SMT Integration

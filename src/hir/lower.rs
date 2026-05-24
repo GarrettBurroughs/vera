@@ -18,6 +18,10 @@ pub enum SemanticError {
     UnknownType {
         name: String,
     },
+    
+    #[error("{0}")]
+    #[diagnostic(code(vera::custom))]
+    Custom(String),
 
     #[error("Undefined variable: {name}")]
     #[diagnostic(code(vera::undefined_variable))]
@@ -221,6 +225,19 @@ impl LoweringContext {
     }
 
     fn lower_type(&mut self, type_ref: &ast::TypeRef) -> HirType {
+        if let Some(arr) = type_ref.syntax().children().find_map(ast::ArrayType::cast) {
+            let inner_ty = arr.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+            let size = arr.size().and_then(|lit| {
+                lit.syntax().text().to_string().trim().parse::<u64>().ok()
+            }).unwrap_or(0);
+            return HirType::Array(Box::new(inner_ty), size);
+        }
+        
+        if let Some(slc) = type_ref.syntax().children().find_map(ast::SliceType::cast) {
+            let inner_ty = slc.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+            return HirType::Slice(Box::new(inner_ty));
+        }
+
         let name = type_ref.as_string().unwrap_or_default();
         match name.as_str() {
             "i32" => HirType::I32,
@@ -724,6 +741,70 @@ impl LoweringContext {
                     arms.push((pat, arm_expr));
                 }
                 HirExpr::Match(Box::new(expr), arms, ret_ty)
+            }
+            ast::Expr::ArrayExpr(arr) => {
+                let elements: Vec<HirExpr> = arr.elements().map(|e| self.lower_expr(&e)).collect();
+                let mut ty = HirType::Error;
+                if !elements.is_empty() {
+                    ty = elements[0].ty();
+                    for el in &elements {
+                        if el.ty() != HirType::Error && el.ty() != ty {
+                            self.errors.push(SemanticError::TypeMismatch {
+                                expected: ty.clone(),
+                                found: el.ty(),
+                            });
+                        }
+                    }
+                }
+                HirExpr::ArrayExpr(elements.clone(), HirType::Array(Box::new(ty), elements.len() as u64))
+            }
+            ast::Expr::IndexExpr(idx) => {
+                let base = idx.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let index = idx.index().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                
+                if index.ty() != HirType::Error && index.ty() != HirType::I32 {
+                    // Assuming indices are i32 for now
+                    self.errors.push(SemanticError::TypeMismatch {
+                        expected: HirType::I32,
+                        found: index.ty(),
+                    });
+                }
+                
+                let ret_ty = match base.ty() {
+                    HirType::Array(inner, _) => *inner,
+                    HirType::Slice(inner) => *inner,
+                    HirType::Error => HirType::Error,
+                    other => {
+                        self.errors.push(SemanticError::Custom(format!("Cannot index into type {:?}", other)));
+                        HirType::Error
+                    }
+                };
+                
+                HirExpr::IndexExpr(Box::new(base), Box::new(index), ret_ty)
+            }
+            ast::Expr::SliceExpr(slc) => {
+                let base = slc.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let start = slc.start().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let end = slc.end().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                
+                if start.ty() != HirType::Error && start.ty() != HirType::I32 {
+                    self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: start.ty() });
+                }
+                if end.ty() != HirType::Error && end.ty() != HirType::I32 {
+                    self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: end.ty() });
+                }
+                
+                let ret_ty = match base.ty() {
+                    HirType::Array(inner, _) => HirType::Slice(inner),
+                    HirType::Slice(inner) => HirType::Slice(inner),
+                    HirType::Error => HirType::Error,
+                    other => {
+                        self.errors.push(SemanticError::Custom(format!("Cannot slice type {:?}", other)));
+                        HirType::Error
+                    }
+                };
+                
+                HirExpr::SliceExpr(Box::new(base), Box::new(start), Box::new(end), ret_ty)
             }
         }
     }

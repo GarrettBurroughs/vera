@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_lex_keywords() {
-        let input = "import pub func if while return match unsafe";
+        let input = "import pub func if while return match unsafe array slice";
         let mut lexer = Token::lexer(input);
         assert_eq!(lexer.next(), Some(Ok(Token::KwImport)));
         lexer.next(); // skip ws

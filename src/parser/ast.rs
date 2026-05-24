@@ -49,6 +49,11 @@ ast_node!(LetStmt, SyntaxKind::LET_STMT);
 ast_node!(ExprStmt, SyntaxKind::EXPR_STMT);
 
 // Expressions
+ast_node!(ArrayExpr, SyntaxKind::ARRAY_EXPR);
+ast_node!(IndexExpr, SyntaxKind::INDEX_EXPR);
+ast_node!(SliceExpr, SyntaxKind::SLICE_EXPR);
+ast_node!(ArrayType, SyntaxKind::ARRAY_TYPE);
+ast_node!(SliceType, SyntaxKind::SLICE_TYPE);
 ast_node!(BinExpr, SyntaxKind::BIN_EXPR);
 ast_node!(PrefixExpr, SyntaxKind::PREFIX_EXPR);
 ast_node!(IfExpr, SyntaxKind::IF_EXPR);
@@ -124,6 +129,9 @@ pub enum Expr {
     StructExpr(StructExpr),
     FieldExpr(FieldExpr),
     MatchExpr(MatchExpr),
+    ArrayExpr(ArrayExpr),
+    IndexExpr(IndexExpr),
+    SliceExpr(SliceExpr),
 }
 
 impl Expr {
@@ -138,6 +146,9 @@ impl Expr {
             SyntaxKind::STRUCT_EXPR => StructExpr::cast(node).map(Expr::StructExpr),
             SyntaxKind::FIELD_EXPR => FieldExpr::cast(node).map(Expr::FieldExpr),
             SyntaxKind::MATCH_EXPR => MatchExpr::cast(node).map(Expr::MatchExpr),
+            SyntaxKind::ARRAY_EXPR => ArrayExpr::cast(node).map(Expr::ArrayExpr),
+            SyntaxKind::INDEX_EXPR => IndexExpr::cast(node).map(Expr::IndexExpr),
+            SyntaxKind::SLICE_EXPR => SliceExpr::cast(node).map(Expr::SliceExpr),
             _ => None,
         }
     }
@@ -215,6 +226,24 @@ impl TypeRef {
             .filter_map(|it| it.into_token())
             .find(|it| !matches!(it.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment))
             .map(|it| it.text().to_string())
+    }
+}
+
+impl ArrayType {
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+    pub fn size(&self) -> Option<Literal> {
+        self.syntax().children().find_map(Literal::cast)
+    }
+}
+
+impl SliceType {
+    pub fn ty(&self) -> Option<TypeRef> {
+        self.syntax().children().find_map(TypeRef::cast)
+    }
+    pub fn is_mut(&self) -> bool {
+        self.syntax().children_with_tokens().any(|it| it.kind() == SyntaxKind::KwMut)
     }
 }
 
@@ -395,6 +424,33 @@ impl FieldExpr {
     }
     pub fn field(&self) -> Option<NameRef> {
         self.syntax().children().filter_map(NameRef::cast).last()
+    }
+}
+
+impl ArrayExpr {
+    pub fn elements(&self) -> impl Iterator<Item = Expr> {
+        self.syntax().children().filter_map(Expr::cast)
+    }
+}
+
+impl IndexExpr {
+    pub fn base(&self) -> Option<Expr> {
+        self.syntax().children().filter_map(Expr::cast).next()
+    }
+    pub fn index(&self) -> Option<Expr> {
+        self.syntax().children().filter_map(Expr::cast).nth(1)
+    }
+}
+
+impl SliceExpr {
+    pub fn base(&self) -> Option<Expr> {
+        self.syntax().children().filter_map(Expr::cast).next()
+    }
+    pub fn start(&self) -> Option<Expr> {
+        self.syntax().children().filter_map(Expr::cast).nth(1)
+    }
+    pub fn end(&self) -> Option<Expr> {
+        self.syntax().children().filter_map(Expr::cast).nth(2)
     }
 }
 

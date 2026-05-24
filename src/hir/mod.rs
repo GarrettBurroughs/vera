@@ -6,6 +6,8 @@ pub enum HirType {
     Struct(String),
     Enum(String),
     Variant(String),
+    Array(Box<HirType>, u64),
+    Slice(Box<HirType>),
     Ptr(Box<HirType>),
     Ref(Box<HirType>),
     Error,
@@ -73,6 +75,9 @@ pub enum HirExpr {
     EnumVariant(String, String, u64, HirType), // enum_name, variant_name, value, type
     VariantConstructor(String, String, Vec<HirExpr>, HirType), // variant_name, case_name, args, type
     Match(Box<HirExpr>, Vec<(HirPattern, HirExpr)>, HirType),
+    ArrayExpr(Vec<HirExpr>, HirType),
+    IndexExpr(Box<HirExpr>, Box<HirExpr>, HirType),
+    SliceExpr(Box<HirExpr>, Box<HirExpr>, Box<HirExpr>, HirType), // base, start, end, type
     Error,
 }
 
@@ -91,6 +96,9 @@ impl HirExpr {
             HirExpr::EnumVariant(_, _, _, ty) => ty.clone(),
             HirExpr::VariantConstructor(_, _, _, ty) => ty.clone(),
             HirExpr::Match(_, _, ty) => ty.clone(),
+            HirExpr::ArrayExpr(_, ty) => ty.clone(),
+            HirExpr::IndexExpr(_, _, ty) => ty.clone(),
+            HirExpr::SliceExpr(_, _, _, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
     }

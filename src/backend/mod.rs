@@ -46,6 +46,23 @@ impl<'ctx> CodeGen<'ctx> {
                 let payload_ty = self.context.i64_type().array_type(4); // 32 bytes max payload
                 Ok(self.context.struct_type(&[i32_ty.into(), payload_ty.into()], false).into())
             }
+            HirType::Array(inner, size) => {
+                let inner_ty = self.lower_type(inner)?;
+                match inner_ty {
+                    inkwell::types::BasicTypeEnum::ArrayType(t) => Ok(t.array_type(*size as u32).into()),
+                    inkwell::types::BasicTypeEnum::FloatType(t) => Ok(t.array_type(*size as u32).into()),
+                    inkwell::types::BasicTypeEnum::IntType(t) => Ok(t.array_type(*size as u32).into()),
+                    inkwell::types::BasicTypeEnum::PointerType(t) => Ok(t.array_type(*size as u32).into()),
+                    inkwell::types::BasicTypeEnum::StructType(t) => Ok(t.array_type(*size as u32).into()),
+                    inkwell::types::BasicTypeEnum::VectorType(t) => Ok(t.array_type(*size as u32).into()),
+                    inkwell::types::BasicTypeEnum::ScalableVectorType(_) => Err("ScalableVectorType not supported in array".into()),
+                }
+            }
+            HirType::Slice(_) => {
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let len_ty = self.context.i64_type();
+                Ok(self.context.struct_type(&[ptr_ty.into(), len_ty.into()], false).into())
+            }
             _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
         }
     }
@@ -472,6 +489,83 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(merge_bb);
                 let res = self.builder.build_load(res_llvm_ty, res_ptr, "match_res_val").unwrap();
                 Ok(res)
+            }
+            HirExpr::ArrayExpr(elements, ty) => {
+                let arr_ty = self.lower_type(ty)?;
+                let ptr = self.builder.build_alloca(arr_ty, "array_alloca").unwrap();
+                for (i, el) in elements.iter().enumerate() {
+                    let el_val = self.compile_expr(el)?;
+                    let idx_val = self.context.i32_type().const_int(i as u64, false);
+                    let el_ptr = unsafe { self.builder.build_in_bounds_gep(arr_ty, ptr, &[self.context.i32_type().const_zero(), idx_val], "el_ptr") }.unwrap();
+                    self.builder.build_store(el_ptr, el_val).unwrap();
+                }
+                let arr_val = self.builder.build_load(arr_ty, ptr, "arr_val").unwrap();
+                Ok(arr_val)
+            }
+            HirExpr::IndexExpr(base, idx, ty) => {
+                let base_val = self.compile_expr(base)?;
+                let idx_val = self.compile_expr(idx)?.into_int_value();
+                
+                let base_ty_hir = base.ty();
+                match base_ty_hir {
+                    HirType::Array(_, _) => {
+                        let arr_ty_llvm = self.lower_type(&base_ty_hir)?;
+                        let arr_ptr = self.builder.build_alloca(arr_ty_llvm, "arr_tmp").unwrap();
+                        self.builder.build_store(arr_ptr, base_val).unwrap();
+                        let el_ptr = unsafe { self.builder.build_in_bounds_gep(arr_ty_llvm, arr_ptr, &[self.context.i32_type().const_zero(), idx_val], "el_ptr") }.unwrap();
+                        let el_ty_llvm = self.lower_type(ty)?;
+                        let el_val = self.builder.build_load(el_ty_llvm, el_ptr, "el_val").unwrap();
+                        Ok(el_val)
+                    }
+                    HirType::Slice(_) => {
+                        let slice_val = base_val.into_struct_value();
+                        let ptr_val = self.builder.build_extract_value(slice_val, 0, "slice_ptr").unwrap().into_pointer_value();
+                        let el_ty_llvm = self.lower_type(ty)?;
+                        let el_ptr = unsafe { self.builder.build_in_bounds_gep(el_ty_llvm, ptr_val, &[idx_val], "el_ptr") }.unwrap();
+                        let el_val = self.builder.build_load(el_ty_llvm, el_ptr, "el_val").unwrap();
+                        Ok(el_val)
+                    }
+                    _ => unreachable!()
+                }
+            }
+            HirExpr::SliceExpr(base, start, end, ty) => {
+                let base_val = self.compile_expr(base)?;
+                let start_val = self.compile_expr(start)?.into_int_value();
+                let end_val = self.compile_expr(end)?.into_int_value();
+                
+                let base_ty_hir = base.ty();
+                
+                let (ptr_val, len_val) = match base_ty_hir {
+                    HirType::Array(_, _) => {
+                        let arr_ty_llvm = self.lower_type(&base_ty_hir)?;
+                        let arr_ptr = self.builder.build_alloca(arr_ty_llvm, "arr_tmp").unwrap();
+                        self.builder.build_store(arr_ptr, base_val).unwrap();
+                        
+                        let start_ptr = unsafe { self.builder.build_in_bounds_gep(arr_ty_llvm, arr_ptr, &[self.context.i32_type().const_zero(), start_val], "start_ptr") }.unwrap();
+                        
+                        let len_i32 = self.builder.build_int_sub(end_val, start_val, "len_i32").unwrap();
+                        let len_i64 = self.builder.build_int_cast(len_i32, self.context.i64_type(), "len_i64").unwrap();
+                        (start_ptr, len_i64)
+                    }
+                    HirType::Slice(inner) => {
+                        let slice_val = base_val.into_struct_value();
+                        let orig_ptr = self.builder.build_extract_value(slice_val, 0, "orig_ptr").unwrap().into_pointer_value();
+                        
+                        let inner_ty_llvm = self.lower_type(&inner)?;
+                        let start_ptr = unsafe { self.builder.build_in_bounds_gep(inner_ty_llvm, orig_ptr, &[start_val], "start_ptr") }.unwrap();
+                        
+                        let len_i32 = self.builder.build_int_sub(end_val, start_val, "len_i32").unwrap();
+                        let len_i64 = self.builder.build_int_cast(len_i32, self.context.i64_type(), "len_i64").unwrap();
+                        (start_ptr, len_i64)
+                    }
+                    _ => unreachable!()
+                };
+                
+                let mut slice_struct = self.context.struct_type(&[self.context.ptr_type(inkwell::AddressSpace::default()).into(), self.context.i64_type().into()], false).get_undef();
+                slice_struct = self.builder.build_insert_value(slice_struct, ptr_val, 0, "insert_ptr").unwrap().into_struct_value();
+                slice_struct = self.builder.build_insert_value(slice_struct, len_val, 1, "insert_len").unwrap().into_struct_value();
+                
+                Ok(slice_struct.into())
             }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
