@@ -29,7 +29,48 @@ This document outlines the macro-level phases required to build the complete Ver
 - [x] Generate SMT-LIB2 queries and shell out to `z3` to verify them (`src/verification/smt.rs`).
 - [x] Validate valid asserts and fail compilation on invalid asserts.
 
-## Phase 5: LLVM Backend CodeGen
-- [ ] Translate typed HIR into LLVM IR using `inkwell`.
-- [ ] Generate proper struct memory layouts, including C-ABI compatible fat-pointers for closures.
-- [ ] Emit final optimized executable binaries (`.exe` / ELF).
+## Phase 5: LLVM Backend CodeGen & Function Calls (Completed)
+- [x] Translate typed HIR into LLVM IR using `inkwell`.
+- [x] Implement variables (`alloca`), assignment (`store`/`load`), and control flow (`br`).
+- [x] Implement function signatures, arguments, and recursive calls.
+
+---
+
+## Comprehensive Todo List
+
+### 1. Language Constructs & Type System
+- [ ] **Structs**: Memory layout rules (C ABI), field access, instantiation.
+- [ ] **Enums & Variants**: Tagged unions, C ABI `@abi(C)` generation, `match` expressions.
+- [ ] **Arrays & Slices**: Compile-time arrays (`array[T, N]`), slices (`slice[T]`, `mut slice[T]`), fat pointer layouts.
+- [ ] **Pointers & References**: Safe references (`ref T`, `mut ref T`), raw pointers (`ptr T`, `mut ptr T`), dereferencing (`*x`).
+- [ ] **Borrow Checker**: Lifetime tracking, exclusive mutability analysis, non-lexical lifetimes.
+- [ ] **Refinement Types**: Types bounded by predicates (`T where P`), erasure during code generation, type-checking assertion obligations.
+- [ ] **Generics & Traits**: Monomorphization, generic type bounds, traits (`trait`, `impl`).
+- [ ] **Closures & Function Pointers**: `func(...)` types, C ABI fat pointer closure representation (`fn_ptr`, `env`), anonymous closure expressions `|x| expr`.
+- [ ] **Error Handling (`?`)**: Desugaring the `?` operator for `Result[T, E]`, early return paths.
+- [ ] **Loops & Iteration**: `while`, `for`, `break`, `continue`.
+- [ ] **Unsafe Blocks**: `unsafe { ... }` scopes for raw pointer manipulations.
+
+### 2. Verification & SMT Integration
+- [ ] **Loop Verification**: `invariant` and `decreases` parsing, induction proofs, termination proofs.
+- [ ] **Ghost Code**: `ghost { ... }` blocks, ghost variables/parameters, ensuring complete erasure in LLVM backend.
+- [ ] **Logic Quantifiers**: `forall`, `exists`, `choose` implementations in WP and SMT-LIB2 backend.
+- [ ] **Memory Verification Models**: Heap modeling in SMT, `valid(r)`, `valid_read(r)`, `separated(p1, p2)` intrinsic predicates.
+- [ ] **Framing Analysis**: `assigns` clauses parsing and semantics, enforcing immutability of unassigned memory in loops and functions.
+- [ ] **Precondition Vacuity Checking**: Automated `unsat` check for preconditions before function verification.
+- [ ] **`std.spec` Core Library**: Implement `is_sorted`, `permutation`, `all_distinct`, `contains` natively in WP logic.
+
+### 3. Compiler Architecture & Tools
+- [ ] **Module System**: `import`, path resolution, file-system mapping, `pub` visibility scopes.
+- [ ] **Incremental Query Engine**: Integrate `salsa` for incremental parsing, type-checking, and isolated background verification queries.
+- [ ] **Self-Hosting Optimizations**: Implement `Strip Mode` in parser to discard CST metadata (comments/whitespace) during CLI builds for memory efficiency.
+- [ ] **Binary Output**: Expand `compile_to_binary` to cross-compile executable ELF/PE formats and object files properly linking system `libc`.
+
+### 4. Language Server Protocol (LSP) Features
+- [ ] **LSP Server Backbone**: Basic text document sync, initialization, and client-server JSON-RPC communication.
+- [ ] **Diagnostic Syncing**: Publish parsing, semantic, and verification errors to the editor.
+- [ ] **Inline Proof Status**: Visual checkmarks and feedback for verified functions and assertions.
+- [ ] **Visual Counterexample Debugging**: Parse Z3 models, filter to local scope, and project inline virtual text (inlay hints) on assertion failures.
+- [ ] **Incremental Asynchronous Proofs**: Background thread execution for verification queries, non-blocking UI, configurable solver timeouts.
+- [ ] **Refactoring & IDE Intelligence**: Rename symbols, formatting (using the lossless CST), Go-to Definition, Auto-completion.
+

@@ -3,6 +3,9 @@ pub enum HirType {
     I32,
     Bool,
     Void,
+    Struct(String),
+    Ptr(Box<HirType>),
+    Ref(Box<HirType>),
     Error,
 }
 

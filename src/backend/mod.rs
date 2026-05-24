@@ -12,30 +12,63 @@ struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    variables: BTreeMap<String, PointerValue<'ctx>>,
+    scopes: Vec<BTreeMap<String, (PointerValue<'ctx>, HirType)>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
+    fn lower_type(&self, ty: &HirType) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            HirType::I32 => Ok(self.context.i32_type().into()),
+            HirType::Bool => Ok(self.context.bool_type().into()),
+            HirType::Void => Ok(self.context.i32_type().into()), // LLVM needs a type, so i32 is used for void returns
+            HirType::Ptr(inner) => {
+                let inner_ty = self.lower_type(inner)?;
+                // Wait, LLVM 17 uses opaque pointers! So context.ptr_type() is just ptr.
+                Ok(self.context.ptr_type(inkwell::AddressSpace::default()).into())
+            }
+            HirType::Ref(_) => {
+                Ok(self.context.ptr_type(inkwell::AddressSpace::default()).into())
+            }
+            // For now, struct returns an error or dummy
+            _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
+        }
+    }
+
+    fn enter_scope(&mut self) {
+        self.scopes.push(BTreeMap::new());
+    }
+
+    fn exit_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn declare_var(&mut self, name: String, ptr: PointerValue<'ctx>, ty: HirType) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, (ptr, ty));
+        }
+    }
+
+    fn lookup_var(&self, name: &str) -> Option<(PointerValue<'ctx>, HirType)> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(var) = scope.get(name) {
+                return Some(var.clone());
+            }
+        }
+        None
+    }
+
     fn declare_func(&mut self, func: &HirFunc) -> Result<(), String> {
-        let ret_type = match func.ret_type {
-            HirType::I32 => self.context.i32_type().into(),
-            HirType::Bool => self.context.bool_type().into(),
-            HirType::Void => self.context.i32_type().into(),
-            _ => return Err("Invalid return type".into()),
-        };
+        let ret_type = self.lower_type(&func.ret_type)?;
 
         let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
         for (_, ty) in &func.params {
-            let llvm_ty = match ty {
-                HirType::I32 => self.context.i32_type().into(),
-                HirType::Bool => self.context.bool_type().into(),
-                _ => return Err("Invalid param type".into()),
-            };
-            param_types.push(llvm_ty);
+            let llvm_ty = self.lower_type(ty)?;
+            param_types.push(llvm_ty.into());
         }
 
         let fn_type = match ret_type {
             BasicTypeEnum::IntType(i) => i.fn_type(&param_types, false),
+            BasicTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
             _ => return Err("Unsupported return type".into()),
         };
 
@@ -48,16 +81,19 @@ impl<'ctx> CodeGen<'ctx> {
         let basic_block = self.context.append_basic_block(llvm_func, "entry");
         self.builder.position_at_end(basic_block);
 
-        self.variables.clear();
+        self.scopes.clear();
+        self.enter_scope(); // Function scope
 
-        for (i, (name, _ty)) in func.params.iter().enumerate() {
+        for (i, (name, ty)) in func.params.iter().enumerate() {
             let param_val = llvm_func.get_nth_param(i as u32).unwrap();
             let alloca = self.builder.build_alloca(param_val.get_type(), name).unwrap();
             self.builder.build_store(alloca, param_val).unwrap();
-            self.variables.insert(name.clone(), alloca);
+            self.declare_var(name.clone(), alloca, ty.clone());
         }
 
         self.compile_block(&func.body)?;
+        
+        self.exit_scope();
 
         // If block doesn't end with return, inject a default return to satisfy LLVM.
         // We really should check if the last instruction was a terminator.
@@ -79,13 +115,19 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn compile_block(&mut self, block: &HirBlock) -> Result<(), String> {
+        self.enter_scope();
         for stmt in &block.statements {
             self.compile_stmt(stmt)?;
         }
+        self.exit_scope();
         Ok(())
     }
 
     fn compile_stmt(&mut self, stmt: &HirStmt) -> Result<(), String> {
+        if self.builder.get_insert_block().unwrap().get_terminator().is_some() {
+            return Ok(()); // Block already terminated, skip dead code
+        }
+
         match stmt {
             HirStmt::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
@@ -98,14 +140,9 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             HirStmt::Let(name, _is_const, ty, initializer) => {
-                let llvm_ty: BasicTypeEnum<'ctx> = match ty {
-                    HirType::I32 => self.context.i32_type().into(),
-                    HirType::Bool => self.context.bool_type().into(),
-                    _ => return Err("Unsupported variable type".into()),
-                };
-                
-                let alloca = self.builder.build_alloca(llvm_ty.into_int_type(), name).unwrap();
-                self.variables.insert(name.clone(), alloca);
+                let llvm_ty = self.lower_type(ty)?;
+                let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
+                self.declare_var(name.clone(), alloca, ty.clone());
                 
                 let init_val = self.compile_expr(initializer)?;
                 self.builder.build_store(alloca, init_val).unwrap();
@@ -130,22 +167,20 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.context.bool_type().const_int(if *val { 1 } else { 0 }, false).into())
             }
             HirExpr::VarRef(name, _) => {
-                if let Some(alloca) = self.variables.get(name) {
-                    let val = self.builder.build_load(self.context.i32_type(), *alloca, name).unwrap(); // Assume i32_type for load, wait it could be bool! We need the actual type.
-                    // To be safe, just use i32 for everything under the hood for phase 3.5.
-                    // Wait, build_load requires knowing the type.
-                    // Actually, alloca stores the allocated type. 
+                if let Some((alloca, ty)) = self.lookup_var(name) {
+                    let llvm_ty = self.lower_type(&ty)?;
+                    let val = self.builder.build_load(llvm_ty, alloca, name).unwrap();
                     Ok(val)
                 } else {
                     Err(format!("Variable {} not found in LLVM codegen", name))
                 }
             }
-            HirExpr::BinaryOp(op, lhs, rhs, _) => {
+            HirExpr::BinaryOp(op, lhs, rhs, ty) => {
                 if *op == BinaryOp::Assign {
                     if let HirExpr::VarRef(name, _) = &**lhs {
                         let rhs_val = self.compile_expr(rhs)?;
-                        if let Some(alloca) = self.variables.get(name) {
-                            self.builder.build_store(*alloca, rhs_val).unwrap();
+                        if let Some((alloca, _)) = self.lookup_var(name) {
+                            self.builder.build_store(alloca, rhs_val).unwrap();
                             return Ok(rhs_val);
                         } else {
                             return Err(format!("Variable {} not found", name));
@@ -155,34 +190,50 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 }
 
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                let lhs_ty = lhs.ty();
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
 
-                let res = match op {
-                    BinaryOp::Add => self.builder.build_int_add(lhs_val, rhs_val, "tmpadd").unwrap(),
-                    BinaryOp::Sub => self.builder.build_int_sub(lhs_val, rhs_val, "tmpsub").unwrap(),
-                    BinaryOp::Mul => self.builder.build_int_mul(lhs_val, rhs_val, "tmpmul").unwrap(),
-                    BinaryOp::Div => self.builder.build_int_signed_div(lhs_val, rhs_val, "tmpdiv").unwrap(),
-                    BinaryOp::Rem => self.builder.build_int_signed_rem(lhs_val, rhs_val, "tmprem").unwrap(),
-                    BinaryOp::Eq => self.builder.build_int_compare(inkwell::IntPredicate::EQ, lhs_val, rhs_val, "tmpeq").unwrap(),
-                    BinaryOp::Neq => self.builder.build_int_compare(inkwell::IntPredicate::NE, lhs_val, rhs_val, "tmpneq").unwrap(),
-                    BinaryOp::Lt => self.builder.build_int_compare(inkwell::IntPredicate::SLT, lhs_val, rhs_val, "tmplt").unwrap(),
-                    BinaryOp::Gt => self.builder.build_int_compare(inkwell::IntPredicate::SGT, lhs_val, rhs_val, "tmpgt").unwrap(),
-                    BinaryOp::Le => self.builder.build_int_compare(inkwell::IntPredicate::SLE, lhs_val, rhs_val, "tmple").unwrap(),
-                    BinaryOp::Ge => self.builder.build_int_compare(inkwell::IntPredicate::SGE, lhs_val, rhs_val, "tmpge").unwrap(),
-                    BinaryOp::And => self.builder.build_and(lhs_val, rhs_val, "tmpand").unwrap(),
-                    BinaryOp::Or => self.builder.build_or(lhs_val, rhs_val, "tmpor").unwrap(),
-                    _ => return Err("Unsupported binary op".into()),
+                let res = match lhs_ty {
+                    HirType::I32 | HirType::Bool => {
+                        let lhs_int = lhs_val.into_int_value();
+                        let rhs_int = rhs_val.into_int_value();
+                        match op {
+                            BinaryOp::Add => self.builder.build_int_add(lhs_int, rhs_int, "tmpadd").unwrap().into(),
+                            BinaryOp::Sub => self.builder.build_int_sub(lhs_int, rhs_int, "tmpsub").unwrap().into(),
+                            BinaryOp::Mul => self.builder.build_int_mul(lhs_int, rhs_int, "tmpmul").unwrap().into(),
+                            BinaryOp::Div => self.builder.build_int_signed_div(lhs_int, rhs_int, "tmpdiv").unwrap().into(),
+                            BinaryOp::Rem => self.builder.build_int_signed_rem(lhs_int, rhs_int, "tmprem").unwrap().into(),
+                            BinaryOp::Eq => self.builder.build_int_compare(inkwell::IntPredicate::EQ, lhs_int, rhs_int, "tmpeq").unwrap().into(),
+                            BinaryOp::Neq => self.builder.build_int_compare(inkwell::IntPredicate::NE, lhs_int, rhs_int, "tmpneq").unwrap().into(),
+                            BinaryOp::Lt => self.builder.build_int_compare(inkwell::IntPredicate::SLT, lhs_int, rhs_int, "tmplt").unwrap().into(),
+                            BinaryOp::Gt => self.builder.build_int_compare(inkwell::IntPredicate::SGT, lhs_int, rhs_int, "tmpgt").unwrap().into(),
+                            BinaryOp::Le => self.builder.build_int_compare(inkwell::IntPredicate::SLE, lhs_int, rhs_int, "tmple").unwrap().into(),
+                            BinaryOp::Ge => self.builder.build_int_compare(inkwell::IntPredicate::SGE, lhs_int, rhs_int, "tmpge").unwrap().into(),
+                            BinaryOp::And => self.builder.build_and(lhs_int, rhs_int, "tmpand").unwrap().into(),
+                            BinaryOp::Or => self.builder.build_or(lhs_int, rhs_int, "tmpor").unwrap().into(),
+                            _ => return Err("Unsupported binary op on int/bool".into()),
+                        }
+                    }
+                    _ => return Err(format!("Unsupported type for binary op: {:?}", lhs_ty)),
                 };
-                Ok(res.into())
+                Ok(res)
             }
-            HirExpr::UnaryOp(op, inner, _) => {
-                let inner_val = self.compile_expr(inner)?.into_int_value();
-                let res = match op {
-                    UnaryOp::Neg => self.builder.build_int_neg(inner_val, "tmpneg").unwrap(),
-                    UnaryOp::Not => self.builder.build_not(inner_val, "tmpnot").unwrap(),
+            HirExpr::UnaryOp(op, inner, ty) => {
+                let inner_ty = inner.ty();
+                let inner_val = self.compile_expr(inner)?;
+                
+                let res = match inner_ty {
+                    HirType::I32 | HirType::Bool => {
+                        let inner_int = inner_val.into_int_value();
+                        match op {
+                            UnaryOp::Neg => self.builder.build_int_neg(inner_int, "tmpneg").unwrap().into(),
+                            UnaryOp::Not => self.builder.build_not(inner_int, "tmpnot").unwrap().into(),
+                        }
+                    }
+                    _ => return Err(format!("Unsupported type for unary op: {:?}", inner_ty)),
                 };
-                Ok(res.into())
+                Ok(res)
             }
             HirExpr::If(cond, then_block, else_block_opt, _) => {
                 let cond_val = self.compile_expr(cond)?.into_int_value();
@@ -241,7 +292,7 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         context: &context,
         module,
         builder,
-        variables: BTreeMap::new(),
+        scopes: Vec::new(),
     };
     
     for func in &hir.functions {
