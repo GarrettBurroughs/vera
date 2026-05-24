@@ -1,5 +1,5 @@
 // verify-fail
-
+// TODO: Update to run-pass/verify-pass once Loop Verification is implemented in WP
 func main() {
     var arr: array[i32, 5] = [10, 20, 30, 40, 50];
     var sum: i32 = 0;

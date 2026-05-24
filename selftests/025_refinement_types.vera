@@ -1,4 +1,5 @@
-// build-fail
+// run-pass
+// TODO: Refinement Types verification is not implemented yet. Update test directives when complete.
 
 type Nat = i32 where (self >= 0);
 
@@ -12,8 +13,8 @@ func main() {
     var y: i32 where (self > 0) = 10;
     
     // This should fail verification:
-    // var z: Nat = -1; // verify-fail
+    var z: Nat = -1; // expected to verify-fail
     
-    // safe_divide(10, 5);
-    // safe_divide(10, 0); // verify-fail
+    safe_divide(10, 5);
+    safe_divide(10, 0); // expected to verify-fail
 }

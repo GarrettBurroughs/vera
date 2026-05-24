@@ -1,5 +1,5 @@
 // verify-fail
-
+// TODO: Update to run-pass/verify-pass once Verification of enums, Result types, and early returns is implemented
 func parse_int(valid: bool): result[i32, i32] {
     if valid {
         return Ok(42);

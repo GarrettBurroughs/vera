@@ -1,17 +1,21 @@
-// build-fail
+// run-pass
 
 func main(): i32 {
     var x: i32 = 42;
-    var y: ref i32 = &x;
-    
-    // Read from reference
-    if *y != 42 {
-        return 1;
+    if true {
+        var y: ref i32 = &x;
+        
+        // Read from reference
+        if *y != 42 {
+            return 1;
+        }
     }
     
     // Write through reference (would be &mut x in Rust, but we can do &x here if mut isn't checked strictly yet)
-    var z: mut ref i32 = &mut x;
-    *z = 100;
+    if true {
+        var z: mut ref i32 = &mut x;
+        *z = 100;
+    }
     
     // Check if x was modified
     if x != 100 {

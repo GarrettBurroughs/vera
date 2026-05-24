@@ -116,10 +116,27 @@ impl LoweringContext {
         if self.structs.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if self.generic_templates.structs.contains_key(name) {
-            self.struct_worklist.push((name.to_string(), args));
-            // Insert dummy to prevent duplicate requests
+        if let Some(s) = self.generic_templates.structs.get(name).cloned() {
+            // Insert dummy to prevent duplicate requests/infinite recursion
             self.structs.insert(monomorphized_name.clone(), Vec::new());
+            
+            let mut temp_env = self.type_env.clone();
+            if let Some(params) = s.generic_params() {
+                for (param, arg) in params.params().zip(args.iter()) {
+                    temp_env.insert(param.as_string().unwrap_or_default(), arg.clone());
+                }
+            }
+            
+            let prev_env = std::mem::replace(&mut self.type_env, temp_env);
+            let mut fields = Vec::new();
+            for f in s.fields() {
+                if let (Some(f_name), Some(f_ty_ref)) = (f.name(), f.ty()) {
+                    let f_ty = self.lower_type(&f_ty_ref);
+                    fields.push((f_name.text().to_string(), f_ty));
+                }
+            }
+            self.type_env = prev_env;
+            self.structs.insert(monomorphized_name.clone(), fields);
         }
         monomorphized_name
     }
@@ -133,9 +150,14 @@ impl LoweringContext {
         if self.enums.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if self.generic_templates.enums.contains_key(name) {
-            self.enum_worklist.push((name.to_string(), args));
-            self.enums.insert(monomorphized_name.clone(), Vec::new());
+        if let Some(e) = self.generic_templates.enums.get(name).cloned() {
+            let mut variants = Vec::new();
+            for v in e.variants() {
+                if let Some(v_name) = v.name() {
+                    variants.push(v_name.text().to_string());
+                }
+            }
+            self.enums.insert(monomorphized_name.clone(), variants);
         }
         monomorphized_name
     }
@@ -149,9 +171,26 @@ impl LoweringContext {
         if self.variants.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if self.generic_templates.variants.contains_key(name) {
-            self.variant_worklist.push((name.to_string(), args));
+        if let Some(v) = self.generic_templates.variants.get(name).cloned() {
             self.variants.insert(monomorphized_name.clone(), Vec::new());
+            let mut temp_env = self.type_env.clone();
+            if let Some(params) = v.generic_params() {
+                for (param, arg) in params.params().zip(args.iter()) {
+                    temp_env.insert(param.as_string().unwrap_or_default(), arg.clone());
+                }
+            }
+            let prev_env = std::mem::replace(&mut self.type_env, temp_env);
+            let mut cases = Vec::new();
+            for case in v.cases() {
+                let case_name = case.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let mut payload_tys = Vec::new();
+                for ty_ref in case.types() {
+                    payload_tys.push(self.lower_type(&ty_ref));
+                }
+                cases.push((case_name, payload_tys));
+            }
+            self.type_env = prev_env;
+            self.variants.insert(monomorphized_name.clone(), cases);
         }
         monomorphized_name
     }
@@ -169,7 +208,7 @@ impl LoweringContext {
             self.func_worklist.push((name.to_string(), args.clone()));
             
             let old_env = self.type_env.clone();
-            self.type_env.clear();
+            self.type_env = self.type_aliases.clone();
             if let Some(params) = func.generic_params() {
                 for (param, arg) in params.params().zip(args.iter()) {
                     self.type_env.insert(param.as_string().unwrap_or_default(), arg.clone());
@@ -373,7 +412,7 @@ impl LoweringContext {
 
             if let Some((name, args)) = self.func_worklist.pop() {
                 if let Some(func) = self.generic_templates.funcs.get(&name).cloned() {
-                    self.type_env.clear();
+                    self.type_env = self.type_aliases.clone();
                     if let Some(params) = func.generic_params() {
                         for (param, arg) in params.params().zip(args.iter()) {
                             self.type_env.insert(param.as_string().unwrap_or_default(), arg.clone());
@@ -1006,7 +1045,41 @@ impl LoweringContext {
                     field_exprs.push((f_name, f_expr));
                 }
                 
-                if let Some(def_fields) = self.structs.get(&name) {
+                let mut mono_name = name.clone();
+                let mut inferred_args = Vec::new();
+                if self.generic_templates.structs.contains_key(&name) {
+                    let template = self.generic_templates.structs.get(&name).unwrap().clone();
+                    if let Some(params) = template.generic_params() {
+                        for param in params.params() {
+                            let p_name = param.as_string().unwrap_or_default();
+                            let mut inferred_ty = HirType::Error;
+                            
+                            for f_decl in template.fields() {
+                                if let (Some(f_decl_name), Some(f_decl_ty)) = (f_decl.name(), f_decl.ty()) {
+                                    if f_decl_ty.as_string().unwrap_or_default() == p_name {
+                                        let f_name_str = f_decl_name.text().to_string();
+                                        if let Some((_, e)) = field_exprs.iter().find(|(n, _)| n == &f_name_str) {
+                                            inferred_ty = e.ty();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            inferred_args.push(inferred_ty);
+                        }
+                        mono_name = self.request_monomorphize_struct(&name, inferred_args.clone());
+                    }
+                }
+                
+                let mut is_unknown = false;
+                let def_fields = if let Some(fields) = self.structs.get(&mono_name) {
+                    fields.clone()
+                } else {
+                    is_unknown = true;
+                    Vec::new()
+                };
+                
+                if !is_unknown {
                     // Type check fields
                     for (f_name, f_expr) in &field_exprs {
                         if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == f_name) {
@@ -1017,12 +1090,12 @@ impl LoweringContext {
                                 });
                             }
                         } else {
-                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, name) });
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, mono_name) });
                         }
                     }
-                    HirExpr::StructExpr(name.clone(), field_exprs, HirType::Struct(name))
+                    HirExpr::StructExpr(mono_name.clone(), field_exprs, HirType::Struct(mono_name))
                 } else {
-                    self.errors.push(SemanticError::UnknownType { name: name.clone() });
+                    self.errors.push(SemanticError::UnknownType { name: mono_name.clone() });
                     HirExpr::Error
                 }
             }
