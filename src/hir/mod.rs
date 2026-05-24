@@ -128,6 +128,7 @@ impl HirExpr {
 }
 
 pub mod lower;
+pub mod borrowck;
 
 #[derive(Debug, Clone)]
 pub enum HirPattern {

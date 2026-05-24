@@ -112,6 +112,13 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         has_errors = true;
     }
     
+    let mut borrow_ck = hir::borrowck::BorrowChecker::new();
+    borrow_ck.check_program(&hir_program);
+    if !borrow_ck.errors.is_empty() {
+        for err in borrow_ck.errors { error!("Borrow Error: {}", err); }
+        has_errors = true;
+    }
+    
     if has_errors {
         return Err(());
     }

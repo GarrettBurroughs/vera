@@ -1,0 +1,7 @@
+// build-fail
+func main(): i32 {
+    var x: i32 = 5;
+    var p1: mut ref i32 = &mut x;
+    var p2: ref i32 = &x; // Error: Cannot borrow x as immutable because it is mutably borrowed
+    return 0;
+}
