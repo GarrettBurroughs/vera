@@ -230,6 +230,15 @@ impl<'a> Parser<'a> {
             self.parse_type();
             self.expect(SyntaxKind::RBracket);
             self.finish_node();
+        } else if self.at(SyntaxKind::TyResult) {
+            self.start_node(SyntaxKind::RESULT_TYPE);
+            self.advance();
+            self.expect(SyntaxKind::LBracket);
+            self.parse_type(); // Ok type
+            self.expect(SyntaxKind::Comma);
+            self.parse_type(); // Err type
+            self.expect(SyntaxKind::RBracket);
+            self.finish_node();
         } else if self.at(SyntaxKind::KwMut) && self.nth_at(1, SyntaxKind::TySlice) {
             self.start_node(SyntaxKind::SLICE_TYPE);
             self.advance(); // mut
@@ -588,6 +597,10 @@ impl<'a> Parser<'a> {
                     let comp = self.complete(m, SyntaxKind::INDEX_EXPR);
                     m = self.precede(comp);
                 }
+            } else if self.at(SyntaxKind::Question) {
+                self.advance(); // consume ?
+                let comp = self.complete(m, SyntaxKind::TRY_EXPR);
+                m = self.precede(comp);
             } else {
                 break;
             }
@@ -1052,6 +1065,13 @@ mod tests {
                 const y = s[0..5];
             }
         ";
+        let (_, errors) = parse(input);
+        assert!(errors.is_empty(), "Expected no parse errors, got {:?}", errors);
+    }
+
+    #[test]
+    fn test_parse_result_type() {
+        let input = "func foo(): result[i32, i32] {}";
         let (_, errors) = parse(input);
         assert!(errors.is_empty(), "Expected no parse errors, got {:?}", errors);
     }

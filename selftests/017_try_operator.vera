@@ -1,0 +1,27 @@
+func parse_int(valid: bool): result[i32, i32] {
+    if valid {
+        return Ok(42);
+    } else {
+        return Err(1);
+    }
+}
+
+func test_try(valid: bool): result[i32, i32] {
+    var val: i32 = parse_int(valid)?;
+    return Ok(val + 10);
+}
+
+func run_tests(): result[i32, i32] {
+    var a: result[i32, i32] = test_try(true);
+    // a should be Ok(52)
+    var a_val: i32 = a?;
+    assert(a_val == 52);
+    
+    // b should be Err(1), we can't easily assert on it without match statement
+    // but at least it shouldn't crash if we don't `?` it!
+    return Ok(0);
+}
+
+func main() {
+    var res: result[i32, i32] = run_tests();
+}

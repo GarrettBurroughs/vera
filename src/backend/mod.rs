@@ -63,6 +63,13 @@ impl<'ctx> CodeGen<'ctx> {
                 let len_ty = self.context.i64_type();
                 Ok(self.context.struct_type(&[ptr_ty.into(), len_ty.into()], false).into())
             }
+            HirType::Result(ok_ty, err_ty) => {
+                let tag_ty = self.context.i32_type();
+                let ok_llvm = self.lower_type(ok_ty)?;
+                let err_llvm = self.lower_type(err_ty)?;
+                Ok(self.context.struct_type(&[tag_ty.into(), ok_llvm.into(), err_llvm.into()], false).into())
+            }
+            HirType::Error => Err("Cannot lower error type".into()),
             _ => Err(format!("Unsupported LLVM type translation for {:?}", ty)),
         }
     }
@@ -102,7 +109,10 @@ impl<'ctx> CodeGen<'ctx> {
         let fn_type = match ret_type {
             BasicTypeEnum::IntType(i) => i.fn_type(&param_types, false),
             BasicTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
-            _ => return Err("Unsupported return type".into()),
+            BasicTypeEnum::StructType(s) => s.fn_type(&param_types, false),
+            BasicTypeEnum::ArrayType(a) => a.fn_type(&param_types, false),
+            BasicTypeEnum::FloatType(f) => f.fn_type(&param_types, false),
+            _ => return Err(format!("Unsupported return type: {:?}", ret_type)),
         };
 
         self.module.add_function(&func.name, fn_type, None);
@@ -129,13 +139,16 @@ impl<'ctx> CodeGen<'ctx> {
         self.exit_scope();
 
         // If block doesn't end with return, inject a default return to satisfy LLVM.
-        // We really should check if the last instruction was a terminator.
         let block = self.builder.get_insert_block().unwrap();
         if block.get_terminator().is_none() {
-            let default_val = match func.ret_type {
-                HirType::I32 => self.context.i32_type().const_zero(),
-                HirType::Bool => self.context.i32_type().const_zero(), // IntType inside
-                _ => self.context.i32_type().const_zero(),
+            let ret_ty = llvm_func.get_type().get_return_type().unwrap();
+            let default_val: inkwell::values::BasicValueEnum<'ctx> = match ret_ty {
+                BasicTypeEnum::IntType(i) => i.const_zero().into(),
+                BasicTypeEnum::PointerType(p) => p.const_null().into(),
+                BasicTypeEnum::StructType(s) => s.const_zero().into(),
+                BasicTypeEnum::ArrayType(a) => a.const_zero().into(),
+                BasicTypeEnum::FloatType(f) => f.const_zero().into(),
+                _ => panic!("Unsupported return type for implicit return"),
             };
             self.builder.build_return(Some(&default_val)).unwrap();
         }
@@ -164,11 +177,19 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             HirStmt::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
-                    let val = self.compile_expr(expr)?.into_int_value();
+                    let val = self.compile_expr(expr)?;
                     self.builder.build_return(Some(&val)).unwrap();
                 } else {
-                    // return default i32 0 for void functions in LLVM for now
-                    let default_val = self.context.i32_type().const_zero();
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let ret_ty = func.get_type().get_return_type().unwrap();
+                    let default_val: inkwell::values::BasicValueEnum<'ctx> = match ret_ty {
+                        BasicTypeEnum::IntType(i) => i.const_zero().into(),
+                        BasicTypeEnum::PointerType(p) => p.const_null().into(),
+                        BasicTypeEnum::StructType(s) => s.const_zero().into(),
+                        BasicTypeEnum::ArrayType(a) => a.const_zero().into(),
+                        BasicTypeEnum::FloatType(f) => f.const_zero().into(),
+                        _ => panic!("Unsupported return type for implicit return"),
+                    };
                     self.builder.build_return(Some(&default_val)).unwrap();
                 }
             }
@@ -635,6 +656,40 @@ impl<'ctx> CodeGen<'ctx> {
                 slice_struct = self.builder.build_insert_value(slice_struct, len_val, 1, "insert_len").unwrap().into_struct_value();
                 
                 Ok(slice_struct.into())
+            }
+            HirExpr::ResultOk(inner, ty) => {
+                let inner_val = self.compile_expr(inner)?;
+                let res_ty_llvm = self.lower_type(ty)?.into_struct_type();
+                let mut res_struct = res_ty_llvm.get_undef();
+                res_struct = self.builder.build_insert_value(res_struct, self.context.i32_type().const_zero(), 0, "tag_ok").unwrap().into_struct_value();
+                res_struct = self.builder.build_insert_value(res_struct, inner_val, 1, "ok_val").unwrap().into_struct_value();
+                Ok(res_struct.into())
+            }
+            HirExpr::ResultErr(inner, ty) => {
+                let inner_val = self.compile_expr(inner)?;
+                let res_ty_llvm = self.lower_type(ty)?.into_struct_type();
+                let mut res_struct = res_ty_llvm.get_undef();
+                res_struct = self.builder.build_insert_value(res_struct, self.context.i32_type().const_int(1, false), 0, "tag_err").unwrap().into_struct_value();
+                res_struct = self.builder.build_insert_value(res_struct, inner_val, 2, "err_val").unwrap().into_struct_value();
+                Ok(res_struct.into())
+            }
+            HirExpr::Try(inner, _ok_ty) => {
+                let inner_val = self.compile_expr(inner)?.into_struct_value();
+                let tag = self.builder.build_extract_value(inner_val, 0, "tag").unwrap().into_int_value();
+                let is_err = self.builder.build_int_compare(inkwell::IntPredicate::EQ, tag, self.context.i32_type().const_int(1, false), "is_err").unwrap();
+                
+                let current_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let ok_block = self.context.append_basic_block(current_func, "try.ok");
+                let err_block = self.context.append_basic_block(current_func, "try.err");
+                
+                self.builder.build_conditional_branch(is_err, err_block, ok_block).unwrap();
+                
+                self.builder.position_at_end(err_block);
+                self.builder.build_return(Some(&inner_val)).unwrap();
+                
+                self.builder.position_at_end(ok_block);
+                let ok_val = self.builder.build_extract_value(inner_val, 1, "ok_val").unwrap();
+                Ok(ok_val)
             }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
