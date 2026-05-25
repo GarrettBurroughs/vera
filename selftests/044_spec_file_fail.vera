@@ -1,0 +1,9 @@
+// run-fail
+
+import std;
+
+func main(): i32 {
+    const x: i32 = -1;
+    std.assert_valid(x);
+    return 0;
+}

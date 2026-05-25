@@ -1,0 +1,7 @@
+// compile-fail
+
+import other;
+
+func main(): i32 {
+    return other.secret_func(); // Error: Item `secret_func` is private
+}

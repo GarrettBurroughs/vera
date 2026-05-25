@@ -1,0 +1,10 @@
+pub func add(a: i32, b: i32): i32
+spec {
+    ensures result == a + b;
+} {
+    return a + b;
+}
+
+func hidden_sub(a: i32, b: i32): i32 {
+    return a - b;
+}

@@ -28,6 +28,11 @@ pub enum SyntaxKind {
     
     // Nodes (Branches)
     SOURCE_FILE,
+    IMPORT_DECL,
+    PATH,
+    PATH_SEGMENT,
+    IMPORT_ALIAS,
+    IMPORT_LIST,
     FUNC_DECL,
     PARAM_LIST,
     PARAM,

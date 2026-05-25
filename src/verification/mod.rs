@@ -15,7 +15,9 @@ pub enum VerificationError {
 /// This will generate weakest preconditions for each function and prove them using Z3.
 pub fn verify_program(program: &HirProgram) -> Result<(), VerificationError> {
     for func in &program.functions {
-        wp::verify_func(func)?;
+        if func.body.is_some() {
+            wp::verify_func(func)?;
+        }
     }
     Ok(())
 }

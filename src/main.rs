@@ -7,6 +7,7 @@ mod parser;
 mod hir;
 mod backend;
 mod verification;
+mod workspace;
 use crate::parser::ast::AstNode;
 
 #[derive(Parser, Debug)]
@@ -78,37 +79,46 @@ fn setup_logging(cli: &Cli) {
 
 fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Option<String>) -> Result<String, ()> {
     info!("Starting compilation for {}", file);
-    let input = std::fs::read_to_string(file).expect("Failed to read file");
     
-    let parser = parser::Parser::new(&input);
-    let (cst, errors) = parser.parse();
+    let mut workspace = workspace::Workspace::new();
+    let entry_file_id = workspace.load_entry_file(file).map_err(|e| {
+        error!("Workspace error: {:?}", e);
+    })?;
     
-    if let Some(emit_target) = &cli.emit
-        && emit_target == "cst" {
-            println!("{:#?}", cst);
+    if let Some(emit_target) = &cli.emit {
+        if emit_target == "cst" {
+            let entry_data = workspace.files.get(&entry_file_id).unwrap();
+            println!("{:#?}", entry_data.ast);
             return Err(());
         }
-    
-    let mut has_errors = false;
-    if !errors.is_empty() {
-        for err in errors { error!("Parse Error: {}", err); }
-        has_errors = true;
     }
     
-    let source_file = parser::ast::SourceFile::cast(cst).expect("Root is not a SourceFile");
+    let mut has_errors = false;
+    
+    // Check if any file in the workspace had parser errors
+    for file_data in workspace.files.values() {
+        if file_data.has_errors {
+            has_errors = true;
+        }
+    }
+    
+    if has_errors {
+        return Err(());
+    }
+    
     let mut lower_ctx = hir::lower::LoweringContext::new();
-    let hir_program = lower_ctx.lower_program(&source_file);
+    let hir_program = lower_ctx.lower_program(&workspace);
+    
+    if !lower_ctx.errors.is_empty() {
+        for err in lower_ctx.errors { error!("Semantic Error: {}", err); }
+        has_errors = true;
+    }
     
     if let Some(emit_target) = &cli.emit
         && emit_target == "hir" {
             println!("{:#?}", hir_program);
             return Err(());
         }
-    
-    if !lower_ctx.errors.is_empty() {
-        for err in lower_ctx.errors { error!("Semantic Error: {}", err); }
-        has_errors = true;
-    }
     
     let mut borrow_ck = hir::borrowck::BorrowChecker::new();
     borrow_ck.check_program(&hir_program);
@@ -140,12 +150,23 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         && emit_target == "llvm" {
             unsafe { std::env::set_var("PRINT_IR", "1") };
         }
-    
-    let out_bin = output_bin.unwrap_or_else(|| "a.out".to_string());
-    backend::compile_to_binary(&hir_program, &out_bin).expect("Failed to compile");
-    info!("Compilation finished: {}", out_bin);
-    
-    Ok(out_bin)
+
+    let emit_obj = cli.emit.as_deref() == Some("obj");
+
+    let out_path = if emit_obj {
+        output_bin.unwrap_or_else(|| "a.o".to_string())
+    } else {
+        output_bin.unwrap_or_else(|| "a.out".to_string())
+    };
+
+    let opts = backend::CompileOptions {
+        target: cli.target.as_deref(),
+        emit_obj_only: emit_obj,
+    };
+    backend::compile_with_options(&hir_program, &out_path, &opts).expect("Failed to compile");
+    info!("Compilation finished: {}", out_path);
+
+    Ok(out_path)
 }
 
 fn main() -> miette::Result<()> {

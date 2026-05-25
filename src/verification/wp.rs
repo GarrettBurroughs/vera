@@ -16,8 +16,10 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
     let ensures_wp = current_wp.clone();
 
     // 2. Compute WP backwards through statements
-    for stmt in func.body.statements.iter().rev() {
-        current_wp = compute_wp(stmt, current_wp, &ensures_wp, &func.assigns);
+    if let Some(body) = &func.body {
+        for stmt in body.statements.iter().rev() {
+            current_wp = compute_wp(stmt, current_wp, &ensures_wp, &func.assigns);
+        }
     }
 
     // 3. Add requires clauses as preconditions
@@ -43,8 +45,8 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
     // 4. Final Verification Condition (VC): Requires => WP
     let vc = SmtExpr::Implies(Box::new(precondition), Box::new(current_wp));
 
-    // 5. To prove VC is valid, we check if (NOT VC) is satisfiable
     let query = SmtExpr::Not(Box::new(vc));
+    println!("QUERY for {}: {}", func.name.as_str(), query.to_smtlib2());
 
     // 6. Invoke Z3
     let is_sat = check_sat(&query)?;
@@ -304,7 +306,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
                 let smt_args: Vec<SmtExpr> = arg_vars.iter().map(|n| SmtExpr::Var(n.clone(), "Int".into())).collect();
                 SmtExpr::FuncCall(func.as_str(), smt_args)
             } else if ty == &HirType::I32 {
-                SmtExpr::Var(format!("__call_{}", func.as_str()), "Int".into())
+                SmtExpr::Var(format!("__call_{}", func.as_str().replace("::", "_")), "Int".into())
             } else {
                 SmtExpr::BoolConst(false)
             };
@@ -546,7 +548,7 @@ mod tests {
         // WP(const x = 5, x > 0) = 5 > 0
         let init = HirExprKind::IntLiteral(5, HirType::I32);
         let post = SmtExpr::Gt(
-            Box::new(SmtExpr::Var("x".into(), "Int".into())),
+            Box::new(SmtExpr::Var("x_0".into(), "Int".into())),
             Box::new(SmtExpr::IntConst(0)),
         );
         let ensures_wp = SmtExpr::BoolConst(true);
@@ -565,7 +567,7 @@ mod tests {
             HirType::I32,
         );
         let post = SmtExpr::Eq(
-            Box::new(SmtExpr::Var("x".into(), "Int".into())),
+            Box::new(SmtExpr::Var("x_0".into(), "Int".into())),
             Box::new(SmtExpr::IntConst(10)),
         );
         let ensures_wp = SmtExpr::BoolConst(true);

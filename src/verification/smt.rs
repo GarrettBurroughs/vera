@@ -178,13 +178,16 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
     }
 
     smt_script.push_str(&format!("(assert {})\n", expr.to_smtlib2()));
-    smt_script.push_str("(check-sat)\n");
     
     tracing::trace!("SMT QUERY:\n{}", smt_script);
+
+    smt_script.push_str("(check-sat)\n");
 
     // Write to a temporary file, or use stdin.
     // For simplicity, we can pass it via stdin to `z3 -in`.
     use std::io::Write;
+    std::fs::write("query.smt2", &smt_script).unwrap();
+
     let mut child = Command::new(z3_path())
         .arg("-in")
         .stdin(std::process::Stdio::piped())

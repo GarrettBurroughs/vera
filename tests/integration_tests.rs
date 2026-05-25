@@ -121,4 +121,85 @@ func main(): i32 {
         let (ok, output) = vera_check("spec_block", src);
         assert!(ok, "Expected spec block to pass check. output:\n{}", output);
     }
+
+    /// `vera build --emit obj` must produce an object file without linking.
+    #[test]
+    fn test_emit_obj_produces_object_file() {
+        let src = "func main(): i32 { return 42; }\n";
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let vera_src = PathBuf::from(&manifest).join("target/integration_emit_obj.vera");
+        let obj_out = PathBuf::from(&manifest).join("target/integration_emit_obj.o");
+
+        std::fs::write(&vera_src, src).expect("failed to write vera source");
+        let _ = std::fs::remove_file(&obj_out); // clean up any previous run
+
+        let out = Command::new(vera_bin())
+            .args([
+                "--emit",
+                "obj",
+                "build",
+                vera_src.to_str().unwrap(),
+                "--output",
+                obj_out.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to spawn vera binary");
+
+        let _ = std::fs::remove_file(&vera_src);
+
+        assert!(
+            out.status.success(),
+            "`vera build --emit obj` exited with failure: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            obj_out.exists(),
+            "Object file {:?} was not produced",
+            obj_out
+        );
+
+        // Verify ELF magic (Linux) or COFF magic (Windows) — at least non-empty.
+        let bytes = std::fs::read(&obj_out).expect("failed to read object file");
+        let _ = std::fs::remove_file(&obj_out);
+        assert!(!bytes.is_empty(), "Object file should be non-empty");
+        // ELF magic: 0x7f 'E' 'L' 'F'
+        assert_eq!(
+            &bytes[..4],
+            b"\x7fELF",
+            "Expected ELF magic bytes at start of object file"
+        );
+    }
+
+    /// `vera build --target=<triple>` with the host triple produces a working binary.
+    #[test]
+    fn test_target_host_triple_build_succeeds() {
+        let src = "func main(): i32 { return 0; }\n";
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let vera_src = PathBuf::from(&manifest).join("target/integration_target_host.vera");
+        let bin_out = PathBuf::from(&manifest).join("target/integration_target_host.out");
+
+        std::fs::write(&vera_src, src).expect("failed to write vera source");
+
+        // Use x86_64-unknown-linux-gnu as a common host triple on CI.
+        let out = Command::new(vera_bin())
+            .args([
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "build",
+                vera_src.to_str().unwrap(),
+                "--output",
+                bin_out.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to spawn vera binary");
+
+        let _ = std::fs::remove_file(&vera_src);
+        let _ = std::fs::remove_file(&bin_out);
+
+        assert!(
+            out.status.success(),
+            "`vera build --target=x86_64-unknown-linux-gnu` failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

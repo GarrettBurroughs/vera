@@ -2,6 +2,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 use std::collections::BTreeMap;
 use crate::parser::ast::{self, AstNode};
+use crate::workspace::FileId;
 use crate::hir::{Span, HirExprKind, HirStmtKind, HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern, Path, SymbolId};
 
 #[derive(Error, Debug, Diagnostic)]
@@ -22,6 +23,13 @@ pub enum SemanticError {
     #[error("{0}")]
     #[diagnostic(code(vera::custom))]
     Custom(String),
+
+    #[error("Item `{name}` is private and cannot be accessed from outside `{target_module}`")]
+    #[diagnostic(code(vera::private_item_access))]
+    PrivateItemAccess {
+        name: String,
+        target_module: String,
+    },
 
     #[error("Undefined variable: {name}")]
     #[diagnostic(code(vera::undefined_variable))]
@@ -106,12 +114,12 @@ impl SymbolTable {
 #[derive(Default)]
 #[allow(dead_code)] // `traits` and `impls` fields are scaffolded for the trait system (Phase 3)
 pub struct TemplateRegistry {
-    pub funcs: BTreeMap<String, ast::FuncDecl>,
-    pub structs: BTreeMap<String, ast::StructDecl>,
-    pub enums: BTreeMap<String, ast::EnumDecl>,
-    pub variants: BTreeMap<String, ast::VariantDecl>,
-    pub traits: BTreeMap<String, ast::TraitDecl>,
-    pub impls: Vec<ast::ImplDecl>,
+    pub funcs: BTreeMap<String, (FileId, ast::FuncDecl)>,
+    pub structs: BTreeMap<String, (FileId, ast::StructDecl)>,
+    pub enums: BTreeMap<String, (FileId, ast::EnumDecl)>,
+    pub variants: BTreeMap<String, (FileId, ast::VariantDecl)>,
+    pub traits: BTreeMap<String, (FileId, ast::TraitDecl)>,
+    pub impls: Vec<(FileId, ast::ImplDecl)>,
 }
 
 pub struct LoweringContext {
@@ -130,6 +138,8 @@ pub struct LoweringContext {
     pub type_aliases: BTreeMap<String, HirType>,
     current_func_ret_type: HirType,
     in_unsafe_block: bool,
+    pub resolver: crate::hir::name_resolution::NameResolver,
+    pub current_file: FileId,
 }
 
 impl LoweringContext {
@@ -150,6 +160,12 @@ impl LoweringContext {
             type_aliases: BTreeMap::new(),
             current_func_ret_type: HirType::Void,
             in_unsafe_block: false,
+            resolver: crate::hir::name_resolution::NameResolver {
+                scopes: BTreeMap::new(),
+                file_to_module: BTreeMap::new(),
+                module_to_file: BTreeMap::new(),
+            },
+            current_file: 0,
         }
     }
 
@@ -161,6 +177,21 @@ impl LoweringContext {
         self.symbol_table.pop_scope();
     }
 
+    fn current_module_name(&self) -> String {
+        self.resolver.file_to_module.get(&self.current_file).cloned().unwrap_or_default()
+    }
+
+    fn resolve_path(&mut self, segments: &[String]) -> String {
+        match self.resolver.resolve_path(self.current_file, segments) {
+            Ok(p) => p,
+            Err(crate::hir::name_resolution::ResolutionError::PrivateItemAccess { name, target_module }) => {
+                self.errors.push(SemanticError::PrivateItemAccess { name: name.clone(), target_module: target_module.clone() });
+                segments.last().unwrap().clone()
+            }
+            Err(_) => segments.last().unwrap().clone(),
+        }
+    }
+
     fn request_monomorphize_struct(&mut self, name: &str, args: Vec<HirType>) -> String {
         let monomorphized_name = if args.is_empty() {
             name.to_string()
@@ -170,7 +201,7 @@ impl LoweringContext {
         if self.structs.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if let Some(s) = self.generic_templates.structs.get(name).cloned() {
+        if let Some((_, s)) = self.generic_templates.structs.get(name).cloned() {
             // Insert dummy to prevent duplicate requests/infinite recursion
             self.structs.insert(monomorphized_name.clone(), Vec::new());
             
@@ -204,7 +235,7 @@ impl LoweringContext {
         if self.enums.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if let Some(e) = self.generic_templates.enums.get(name).cloned() {
+        if let Some((_, e)) = self.generic_templates.enums.get(name).cloned() {
             let mut variants = Vec::new();
             for v in e.variants() {
                 if let Some(v_name) = v.name() {
@@ -225,7 +256,7 @@ impl LoweringContext {
         if self.variants.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if let Some(v) = self.generic_templates.variants.get(name).cloned() {
+        if let Some((_, v)) = self.generic_templates.variants.get(name).cloned() {
             self.variants.insert(monomorphized_name.clone(), Vec::new());
             let mut temp_env = self.type_env.clone();
             if let Some(params) = v.generic_params() {
@@ -258,7 +289,7 @@ impl LoweringContext {
         if self.functions.contains_key(&monomorphized_name) {
             return monomorphized_name;
         }
-        if let Some(func) = self.generic_templates.funcs.get(name).cloned() {
+        if let Some((_, func)) = self.generic_templates.funcs.get(name).cloned() {
             self.func_worklist.push((name.to_string(), args.clone()));
             
             let old_env = self.type_env.clone();
@@ -337,7 +368,7 @@ pub fn ty_to_string(ty: &HirType) -> String {
 }
 
 impl LoweringContext {
-    pub fn lower_program(&mut self, source_file: &ast::SourceFile) -> HirProgram {
+    pub fn lower_program(&mut self, workspace: &crate::workspace::Workspace) -> HirProgram {
         self.generic_templates = TemplateRegistry::default();
         self.structs.clear();
         self.enums.clear();
@@ -349,45 +380,56 @@ impl LoweringContext {
         self.variant_worklist.clear();
         self.type_aliases.clear();
 
-        for a in source_file.type_aliases() {
-            let name = a.name().map(|n| n.text().to_string()).unwrap_or_default();
-            if let Some(ty_ref) = a.ty() {
-                let lowered = self.lower_type(&ty_ref);
-                self.type_env.insert(name.clone(), lowered.clone());
-                self.type_aliases.insert(name, lowered);
-            }
-        }
+        self.resolver = crate::hir::name_resolution::NameResolver::build(workspace, &mut self.errors);
 
-        // Pass 0: Gather templates
-        for s in source_file.structs() {
-            let name = s.name().map(|n| n.text().to_string()).unwrap_or_default();
-            self.generic_templates.structs.insert(name.clone(), s.clone());
-            if s.generic_params().is_none() {
-                self.request_monomorphize_struct(&name, Vec::new());
+        for (&file_id, file_data) in &workspace.files {
+            self.current_file = file_id;
+            
+            for a in file_data.ast.type_aliases() {
+                let name = a.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let global_name = format!("{}::{}", self.current_module_name(), name);
+                if let Some(ty_ref) = a.ty() {
+                    let lowered = self.lower_type(&ty_ref);
+                    self.type_env.insert(global_name.clone(), lowered.clone());
+                    self.type_aliases.insert(global_name, lowered);
+                }
             }
-        }
 
-        for e in source_file.enums() {
-            let name = e.name().map(|n| n.text().to_string()).unwrap_or_default();
-            self.generic_templates.enums.insert(name.clone(), e.clone());
-            if e.generic_params().is_none() {
-                self.request_monomorphize_enum(&name, Vec::new());
+            // Pass 0: Gather templates
+            for s in file_data.ast.structs() {
+                let name = s.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let global_name = format!("{}::{}", self.current_module_name(), name);
+                self.generic_templates.structs.insert(global_name.clone(), (file_id, s.clone()));
+                if s.generic_params().is_none() {
+                    self.request_monomorphize_struct(&global_name, Vec::new());
+                }
             }
-        }
 
-        for v in source_file.variants() {
-            let name = v.name().map(|n| n.text().to_string()).unwrap_or_default();
-            self.generic_templates.variants.insert(name.clone(), v.clone());
-            if v.generic_params().is_none() {
-                self.request_monomorphize_variant(&name, Vec::new());
+            for e in file_data.ast.enums() {
+                let name = e.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let global_name = format!("{}::{}", self.current_module_name(), name);
+                self.generic_templates.enums.insert(global_name.clone(), (file_id, e.clone()));
+                if e.generic_params().is_none() {
+                    self.request_monomorphize_enum(&global_name, Vec::new());
+                }
             }
-        }
 
-        for func in source_file.functions() {
-            let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
-            self.generic_templates.funcs.insert(name.clone(), func.clone());
-            if func.generic_params().is_none() {
-                self.request_monomorphize_func(&name, Vec::new());
+            for v in file_data.ast.variants() {
+                let name = v.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let global_name = format!("{}::{}", self.current_module_name(), name);
+                self.generic_templates.variants.insert(global_name.clone(), (file_id, v.clone()));
+                if v.generic_params().is_none() {
+                    self.request_monomorphize_variant(&global_name, Vec::new());
+                }
+            }
+
+            for func in file_data.ast.functions() {
+                let name = func.name().map(|n| n.text().to_string()).unwrap_or_default();
+                let global_name = format!("{}::{}", self.current_module_name(), name);
+                self.generic_templates.funcs.insert(global_name.clone(), (file_id, func.clone()));
+                if func.generic_params().is_none() {
+                    self.request_monomorphize_func(&global_name, Vec::new());
+                }
             }
         }
 
@@ -398,7 +440,8 @@ impl LoweringContext {
 
         loop {
             if let Some((name, args)) = self.struct_worklist.pop() {
-                if let Some(s) = self.generic_templates.structs.get(&name).cloned() {
+                if let Some((file_id, s)) = self.generic_templates.structs.get(&name).cloned() {
+                    self.current_file = file_id;
                     self.type_env.clear();
                     if let Some(params) = s.generic_params() {
                         for (param, arg) in params.params().zip(args.iter()) {
@@ -420,7 +463,8 @@ impl LoweringContext {
             }
 
             if let Some((name, args)) = self.enum_worklist.pop() {
-                if let Some(e) = self.generic_templates.enums.get(&name).cloned() {
+                if let Some((file_id, e)) = self.generic_templates.enums.get(&name).cloned() {
+                    self.current_file = file_id;
                     let mut variants = Vec::new();
                     for v in e.variants() {
                         if let Some(v_name) = v.name() {
@@ -434,7 +478,8 @@ impl LoweringContext {
             }
 
             if let Some((name, args)) = self.variant_worklist.pop() {
-                if let Some(v) = self.generic_templates.variants.get(&name).cloned() {
+                if let Some((file_id, v)) = self.generic_templates.variants.get(&name).cloned() {
+                    self.current_file = file_id;
                     self.type_env.clear();
                     if let Some(params) = v.generic_params() {
                         for (param, arg) in params.params().zip(args.iter()) {
@@ -458,7 +503,8 @@ impl LoweringContext {
             }
 
             if let Some((name, args)) = self.func_worklist.pop() {
-                if let Some(func) = self.generic_templates.funcs.get(&name).cloned() {
+                if let Some((file_id, func)) = self.generic_templates.funcs.get(&name).cloned() {
+                    self.current_file = file_id;
                     self.type_env = self.type_aliases.clone();
                     if let Some(params) = func.generic_params() {
                         for (param, arg) in params.params().zip(args.iter()) {
@@ -538,8 +584,8 @@ impl LoweringContext {
         }
 
         let body = match func.body() {
-            Some(block) => self.lower_block(&block),
-            None => HirBlock { statements: Vec::new() },
+            Some(block) => Some(self.lower_block(&block)),
+            None => None,
         };
 
         self.exit_scope();
@@ -631,40 +677,40 @@ impl LoweringContext {
             "bool" => HirType::Bool,
             "" => HirType::Error,
             _ => {
+                let global_name = self.resolve_path(&[name.clone()]);
+                
                 if let Some(generic_args) = type_ref.generic_args() {
                     let mut args = Vec::new();
                     for arg in generic_args.args() {
                         args.push(self.lower_type(&arg));
                     }
-                    if self.generic_templates.structs.contains_key(&name) {
-                        let mono_name = self.request_monomorphize_struct(&name, args);
+                    if self.generic_templates.structs.contains_key(&global_name) {
+                        let mono_name = self.request_monomorphize_struct(&global_name, args);
                         return HirType::Struct(mono_name);
-                    } else if self.generic_templates.enums.contains_key(&name) {
-                        let mono_name = self.request_monomorphize_enum(&name, args);
+                    } else if self.generic_templates.enums.contains_key(&global_name) {
+                        let mono_name = self.request_monomorphize_enum(&global_name, args);
                         return HirType::Enum(mono_name);
                     }
                 }
 
-                if self.structs.contains_key(&name) || self.generic_templates.structs.contains_key(&name) {
-                    if self.generic_templates.structs.contains_key(&name) && type_ref.generic_args().is_none() {
-                        // Needs generic arguments! We should probably throw an error, but let's just request with empty args if they have defaults, or we just pass empty args and fail later if it expects some.
-                        // Actually, if it's a generic struct, it must have arguments unless we infer them. 
-                        // But wait! If we are inside the template itself, `Point` refers to `Point<T>`.
-                        // Let's just request monomorphization with empty args for now.
-                        let mono_name = self.request_monomorphize_struct(&name, Vec::new());
+                if self.structs.contains_key(&global_name) || self.generic_templates.structs.contains_key(&global_name) {
+                    if self.generic_templates.structs.contains_key(&global_name) && type_ref.generic_args().is_none() {
+                        let mono_name = self.request_monomorphize_struct(&global_name, Vec::new());
                         HirType::Struct(mono_name)
                     } else {
-                        HirType::Struct(name)
+                        HirType::Struct(global_name)
                     }
-                } else if self.enums.contains_key(&name) || self.generic_templates.enums.contains_key(&name) {
-                    if self.generic_templates.enums.contains_key(&name) && type_ref.generic_args().is_none() {
-                        let mono_name = self.request_monomorphize_enum(&name, Vec::new());
+                } else if self.enums.contains_key(&global_name) || self.generic_templates.enums.contains_key(&global_name) {
+                    if self.generic_templates.enums.contains_key(&global_name) && type_ref.generic_args().is_none() {
+                        let mono_name = self.request_monomorphize_enum(&global_name, Vec::new());
                         HirType::Enum(mono_name)
                     } else {
-                        HirType::Enum(name)
+                        HirType::Enum(global_name)
                     }
-                } else if self.variants.contains_key(&name) {
-                    HirType::Variant(name)
+                } else if self.variants.contains_key(&global_name) {
+                    HirType::Variant(global_name)
+                } else if let Some(ty) = self.type_aliases.get(&global_name) {
+                    ty.clone()
                 } else {
                     self.errors.push(SemanticError::UnknownType { name: name.clone() });
                     HirType::Error
@@ -909,10 +955,12 @@ impl LoweringContext {
                 if let Some(ast::Expr::FieldExpr(field_expr)) = call_expr.callee()
                     && let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
                         let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                        if self.variants.contains_key(&name) {
+                        let global_name = self.resolve_path(&[name.clone()]);
+                        
+                        if self.variants.contains_key(&global_name) {
                             let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
                             is_variant_constructor = true;
-                            variant_name_opt = Some(name);
+                            variant_name_opt = Some(global_name);
                             case_name_opt = Some(field_name);
                         }
                     }
@@ -954,24 +1002,49 @@ impl LoweringContext {
                 } else if let Some(callee_ast) = call_expr.callee() {
                     let mut is_direct = false;
                     let mut direct_name = String::new();
+                    if let ast::Expr::FieldExpr(ref f) = callee_ast { eprintln!("callee base is {:?}", f.base()); }
                     if let ast::Expr::NameRef(name_ref) = &callee_ast {
                         let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                        if name == "Ok" || name == "Err" || name == "valid" || name == "valid_read" || name == "separated" || self.functions.contains_key(&name) {
+                        if name == "Ok" || name == "Err" || name == "valid" || name == "valid_read" || name == "separated" {
                             is_direct = true;
                             direct_name = name.clone();
-                        } else if self.generic_templates.funcs.contains_key(&name) {
-                            self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name) });
+                        } else {
+                            let global_name = self.resolve_path(&[name.clone()]);
+                            if self.functions.contains_key(&global_name) {
+                                is_direct = true;
+                                direct_name = global_name;
+                            } else if self.generic_templates.funcs.contains_key(&global_name) {
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name) });
+                            }
                         }
+                    } else if let ast::Expr::FieldExpr(field_expr) = &callee_ast
+                        && let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
+                            let mod_name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
+                            let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
+                            
+                            let res = self.resolve_path(&[mod_name.clone(), field_name.clone()]);
+                            eprintln!("resolving {}::{}, result: {:?}", mod_name, field_name, res);
+                            
+                            let global_name = res;
+                            eprintln!("Resolving call {}::{}, global_name: {}", mod_name, field_name, global_name);
+                            eprintln!("contains_key: {}", self.functions.contains_key(&global_name));
+                            if self.functions.contains_key(&global_name) {
+                                is_direct = true;
+                                direct_name = global_name;
+                            } else if self.generic_templates.funcs.contains_key(&global_name) {
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", global_name) });
+                            }
                     } else if let ast::Expr::GenericInstExpr(gen_inst) = &callee_ast
                         && let Some(ast::Expr::NameRef(name_ref)) = gen_inst.expr() {
                             let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                            if self.generic_templates.funcs.contains_key(&name) {
+                            let global_name = self.resolve_path(&[name.clone()]);
+                            if self.generic_templates.funcs.contains_key(&global_name) {
                                 if let Some(generic_args) = gen_inst.generic_args() {
                                     let mut args = Vec::new();
                                     for arg in generic_args.args() {
                                         args.push(self.lower_type(&arg));
                                     }
-                                    let mono_name = self.request_monomorphize_func(&name, args);
+                                    let mono_name = self.request_monomorphize_func(&global_name, args);
                                     is_direct = true;
                                     direct_name = mono_name;
                                 }
@@ -1128,6 +1201,8 @@ impl LoweringContext {
             }
             ast::Expr::StructExpr(struct_expr) => {
                 let name = struct_expr.name().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
+                let global_name = self.resolve_path(&[name.clone()]);
+                
                 let mut field_exprs = Vec::new();
                 for f in struct_expr.fields() {
                     let f_name = f.name().map(|n| n.text().to_string()).unwrap_or_default();
@@ -1135,10 +1210,10 @@ impl LoweringContext {
                     field_exprs.push((f_name, f_expr));
                 }
                 
-                let mut mono_name = name.clone();
+                let mut mono_name = global_name.clone();
                 let mut inferred_args = Vec::new();
-                if self.generic_templates.structs.contains_key(&name) {
-                    let template = self.generic_templates.structs.get(&name).unwrap().clone();
+                if self.generic_templates.structs.contains_key(&global_name) {
+                    let (_, template) = self.generic_templates.structs.get(&global_name).unwrap().clone();
                     if let Some(params) = template.generic_params() {
                         for param in params.params() {
                             let p_name = param.as_string().unwrap_or_default();
@@ -1157,7 +1232,7 @@ impl LoweringContext {
                             }
                             inferred_args.push(inferred_ty);
                         }
-                        mono_name = self.request_monomorphize_struct(&name, inferred_args.clone());
+                        mono_name = self.request_monomorphize_struct(&global_name, inferred_args.clone());
                     }
                 }
                 
@@ -1197,12 +1272,13 @@ impl LoweringContext {
                 
                 if let Some(ast::Expr::NameRef(name_ref)) = field_expr.base() {
                     let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                    if self.enums.contains_key(&name) {
+                    let global_name = self.resolve_path(&[name.clone()]);
+                    if self.enums.contains_key(&global_name) || self.generic_templates.enums.contains_key(&global_name) {
                         is_enum_variant = true;
-                        enum_name_opt = Some(name);
-                    } else if self.variants.contains_key(&name) {
+                        enum_name_opt = Some(self.request_monomorphize_enum(&global_name, Vec::new()));
+                    } else if self.variants.contains_key(&global_name) || self.generic_templates.variants.contains_key(&global_name) {
                         is_variant_case = true;
-                        variant_name_opt = Some(name);
+                        variant_name_opt = Some(self.request_monomorphize_variant(&global_name, Vec::new()));
                     }
                 }
                 
@@ -1662,8 +1738,18 @@ mod tests {
     fn parse_and_lower(src: &str) -> (HirProgram, Vec<SemanticError>) {
         let (cst, _parse_errors) = Parser::new(src).parse();
         let source_file = SourceFile::cast(cst).expect("Root is not a SourceFile");
+        
+        let mut workspace = crate::workspace::Workspace::new();
+        workspace.files.insert(0, crate::workspace::FileData {
+            path: std::path::PathBuf::from("main.vera"),
+            source: src.to_string(),
+            ast: source_file,
+            has_errors: false,
+        });
+        workspace.entry_file_id = 0;
+        
         let mut ctx = LoweringContext::new();
-        let program = ctx.lower_program(&source_file);
+        let program = ctx.lower_program(&workspace);
         (program, ctx.errors)
     }
 
@@ -1675,7 +1761,7 @@ mod tests {
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
         assert_eq!(prog.functions.len(), 1);
         let f = &prog.functions[0];
-        assert_eq!(f.name, "main");
+        assert_eq!(f.name, "main::main");
         assert_eq!(f.ret_type, HirType::I32);
         assert!(f.params.is_empty());
     }
@@ -1696,7 +1782,7 @@ mod tests {
     fn test_lower_const_let() {
         let (prog, errors) = parse_and_lower("func f(): i32 { const x: i32 = 1; return x; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        let stmts = &prog.functions[0].body.statements;
+        let stmts = &prog.functions[0].body.as_ref().unwrap().statements;
         if let HirStmtKind::Let(name, _, is_const, ty, init) = &stmts[0].kind {
             assert_eq!(name, "x");
             assert!(*is_const, "expected const binding");
@@ -1712,9 +1798,9 @@ mod tests {
     fn test_lower_var_let() {
         let (prog, errors) = parse_and_lower("func f(): i32 { var y: i32 = 2; return y; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmtKind::Let(name, _, is_const, _, _) = &prog.functions[0].body.statements[0].kind {
+        if let HirStmtKind::Let(name, _, is_const, _, _) = &prog.functions[0].body.as_ref().unwrap().statements[0].kind {
             assert_eq!(name, "y");
-            assert!(!is_const, "expected mutable binding");
+            assert!(!*is_const, "expected mutable binding");
         } else {
             panic!("Expected HirStmtKind::Let");
         }
@@ -1725,7 +1811,7 @@ mod tests {
     fn test_lower_type_inferred_from_initializer() {
         let (prog, errors) = parse_and_lower("func f(): i32 { const x = 42; return x; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmtKind::Let(_, _, _, ty, _) = &prog.functions[0].body.statements[0].kind {
+        if let HirStmtKind::Let(_, _, _, ty, _) = &prog.functions[0].body.as_ref().unwrap().statements[0].kind {
             assert_eq!(*ty, HirType::I32, "type should be inferred as I32");
         } else {
             panic!("Expected HirStmtKind::Let");
@@ -1819,7 +1905,7 @@ mod tests {
         let src = "struct Point { x: i32, y: i32 } func f(): i32 { return 0; }";
         let (prog, errors) = parse_and_lower(src);
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        let fields = prog.structs.get("Point").expect("Point struct not found");
+        let fields = prog.structs.get("main::Point").expect("Point struct not found");
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0], ("x".to_string(), HirType::I32));
         assert_eq!(fields[1], ("y".to_string(), HirType::I32));
@@ -1837,7 +1923,7 @@ mod tests {
         "#;
         let (prog, errors) = parse_and_lower(src);
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        let stmts = &prog.functions[0].body.statements;
+        let stmts = &prog.functions[0].body.as_ref().unwrap().statements;
         if let HirStmtKind::Return(Some(expr)) = &stmts.last().unwrap().kind {
             assert_eq!(expr.ty(), HirType::I32, "field access should have type I32");
         } else {
@@ -1851,7 +1937,7 @@ mod tests {
         let src = "func f(): i32 { return 1 + 2; }";
         let (prog, errors) = parse_and_lower(src);
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmtKind::Return(Some(expr)) = &prog.functions[0].body.statements[0].kind {
+        if let HirStmtKind::Return(Some(expr)) = &prog.functions[0].body.as_ref().unwrap().statements[0].kind {
             if let HirExprKind::BinaryOp(op, _, _, ty) = &expr.kind {
                 assert_eq!(*op, BinaryOp::Add);
                 assert_eq!(*ty, HirType::I32);

@@ -64,6 +64,8 @@ impl<'a> Parser<'a> {
             
             if kind == SyntaxKind::KwFunc {
                 self.parse_func();
+            } else if kind == SyntaxKind::KwImport {
+                self.parse_import_decl();
             } else if kind == SyntaxKind::KwStruct {
                 self.parse_struct_decl();
             } else if kind == SyntaxKind::KwEnum {
@@ -77,7 +79,7 @@ impl<'a> Parser<'a> {
             } else if kind == SyntaxKind::KwType {
                 self.parse_type_alias();
             } else {
-                self.error("Expected function, struct, enum, trait, impl, or variant declaration");
+                self.error("Expected function, struct, enum, trait, impl, import, or variant declaration");
                 self.advance();
             }
             self.eat_trivia();
@@ -172,6 +174,51 @@ impl<'a> Parser<'a> {
     }
     
     // -- Parsing Rules --
+    
+    fn parse_import_decl(&mut self) {
+        self.start_node(SyntaxKind::IMPORT_DECL);
+        self.expect(SyntaxKind::KwImport);
+        
+        self.start_node(SyntaxKind::PATH);
+        self.start_node(SyntaxKind::PATH_SEGMENT);
+        self.expect(SyntaxKind::Ident);
+        self.finish_node(); // PATH_SEGMENT
+        
+        while self.at(SyntaxKind::Dot) {
+            self.advance();
+            if self.at(SyntaxKind::LBrace) {
+                // e.g. import std.collections.{LinkedList, HashMap};
+                self.start_node(SyntaxKind::IMPORT_LIST);
+                self.expect(SyntaxKind::LBrace);
+                while !self.at(SyntaxKind::RBrace) && self.cursor < self.tokens.len() {
+                    self.expect(SyntaxKind::Ident);
+                    if self.at(SyntaxKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(SyntaxKind::RBrace);
+                self.finish_node(); // IMPORT_LIST
+                break;
+            } else {
+                self.start_node(SyntaxKind::PATH_SEGMENT);
+                self.expect(SyntaxKind::Ident);
+                self.finish_node(); // PATH_SEGMENT
+            }
+        }
+        self.finish_node(); // PATH
+        
+        if self.at(SyntaxKind::KwAs) {
+            self.start_node(SyntaxKind::IMPORT_ALIAS);
+            self.advance();
+            self.expect(SyntaxKind::Ident);
+            self.finish_node(); // IMPORT_ALIAS
+        }
+        
+        self.expect(SyntaxKind::Semi);
+        self.finish_node(); // IMPORT_DECL
+    }
     
     fn parse_func(&mut self) {
         self.start_node(SyntaxKind::FUNC_DECL);

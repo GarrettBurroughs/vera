@@ -84,7 +84,7 @@ pub struct HirFunc {
     pub params: Vec<(String, SymbolId, HirType)>,
     pub ret_type: HirType,
     pub ret_sym_id: Option<SymbolId>,
-    pub body: HirBlock,
+    pub body: Option<HirBlock>,
     pub requires: Vec<HirExpr>,
     pub ensures: Vec<HirExpr>,
     pub assigns: Vec<HirExpr>,
@@ -232,6 +232,7 @@ impl HirExpr {
 
 pub mod lower;
 pub mod borrowck;
+pub mod name_resolution;
 
 #[derive(Debug, Clone)]
 pub enum HirPattern {

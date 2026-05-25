@@ -33,6 +33,12 @@ macro_rules! ast_node {
 }
 
 ast_node!(SourceFile, SyntaxKind::SOURCE_FILE);
+ast_node!(ImportDecl, SyntaxKind::IMPORT_DECL);
+ast_node!(Path, SyntaxKind::PATH);
+ast_node!(PathSegment, SyntaxKind::PATH_SEGMENT);
+ast_node!(ImportAlias, SyntaxKind::IMPORT_ALIAS);
+ast_node!(ImportList, SyntaxKind::IMPORT_LIST);
+
 ast_node!(FuncDecl, SyntaxKind::FUNC_DECL);
 ast_node!(ParamList, SyntaxKind::PARAM_LIST);
 ast_node!(Param, SyntaxKind::PARAM);
@@ -195,6 +201,9 @@ impl Expr {
 // Accessor methods for AST Nodes
 
 impl SourceFile {
+    pub fn imports(&self) -> impl Iterator<Item = ImportDecl> {
+        self.syntax().children().filter_map(ImportDecl::cast)
+    }
     pub fn functions(&self) -> impl Iterator<Item = FuncDecl> {
         self.syntax().children().filter_map(FuncDecl::cast)
     }
@@ -218,6 +227,42 @@ impl SourceFile {
     }
 }
 
+impl ImportDecl {
+    pub fn path(&self) -> Option<Path> {
+        self.syntax().children().find_map(Path::cast)
+    }
+    pub fn alias(&self) -> Option<ImportAlias> {
+        self.syntax().children().find_map(ImportAlias::cast)
+    }
+    pub fn import_list(&self) -> Option<ImportList> {
+        self.syntax().children().find_map(ImportList::cast)
+    }
+}
+
+impl Path {
+    pub fn segments(&self) -> impl Iterator<Item = PathSegment> {
+        self.syntax().children().filter_map(PathSegment::cast)
+    }
+}
+
+impl PathSegment {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+}
+
+impl ImportAlias {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
+    }
+}
+
+impl ImportList {
+    pub fn items(&self) -> impl Iterator<Item = SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token()).filter(|it| it.kind() == SyntaxKind::Ident)
+    }
+}
+
 impl FuncDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax()
@@ -226,6 +271,11 @@ impl FuncDecl {
             .find(|it| it.kind() == SyntaxKind::Ident)
     }
     
+    pub fn is_pub(&self) -> bool {
+        self.syntax().children_with_tokens()
+            .any(|it| it.kind() == SyntaxKind::KwPub)
+    }
+
     pub fn generic_params(&self) -> Option<GenericParams> {
         self.syntax().children().find_map(GenericParams::cast)
     }
@@ -343,6 +393,12 @@ impl TypeAlias {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
     }
+
+    pub fn is_pub(&self) -> bool {
+        self.syntax().children_with_tokens()
+            .any(|it| it.kind() == SyntaxKind::KwPub)
+    }
+
     pub fn ty(&self) -> Option<TypeRef> {
         self.syntax().children().find_map(TypeRef::cast)
     }
@@ -504,6 +560,12 @@ impl StructDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
     }
+
+    pub fn is_pub(&self) -> bool {
+        self.syntax().children_with_tokens()
+            .any(|it| it.kind() == SyntaxKind::KwPub)
+    }
+
     pub fn generic_params(&self) -> Option<GenericParams> {
         self.syntax().children().find_map(GenericParams::cast)
     }
@@ -737,6 +799,11 @@ impl EnumDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
     }
+    
+    pub fn is_pub(&self) -> bool {
+        self.syntax().children_with_tokens().any(|it| it.kind() == SyntaxKind::KwPub)
+    }
+
     pub fn generic_params(&self) -> Option<GenericParams> {
         self.syntax().children().find_map(GenericParams::cast)
     }
@@ -755,6 +822,11 @@ impl VariantDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax().children_with_tokens().filter_map(|it| it.into_token()).find(|it| it.kind() == SyntaxKind::Ident)
     }
+    
+    pub fn is_pub(&self) -> bool {
+        self.syntax().children_with_tokens().any(|it| it.kind() == SyntaxKind::KwPub)
+    }
+
     pub fn generic_params(&self) -> Option<GenericParams> {
         self.syntax().children().find_map(GenericParams::cast)
     }

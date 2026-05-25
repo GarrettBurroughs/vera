@@ -118,12 +118,32 @@ impl<'ctx> CodeGen<'ctx> {
             _ => return Err(format!("Unsupported return type: {:?}", ret_type)),
         };
 
-        self.module.add_function(&func.name, fn_type, None);
+        let llvm_name = if func.name.ends_with("::main") { 
+            "main" 
+        } else if func.body.is_none() {
+            func.name.split("::").last().unwrap()
+        } else { 
+            &func.name 
+        };
+        self.module.add_function(llvm_name, fn_type, None);
         Ok(())
     }
 
     fn compile_func(&mut self, func: &HirFunc) -> Result<(), String> {
-        let llvm_func = self.module.get_function(&func.name).unwrap();
+        let llvm_name = if func.name.ends_with("::main") { 
+            "main" 
+        } else if func.body.is_none() {
+            func.name.split("::").last().unwrap()
+        } else { 
+            &func.name 
+        };
+        let llvm_func = self.module.get_function(llvm_name).unwrap();
+        
+        let body = match &func.body {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+
         let basic_block = self.context.append_basic_block(llvm_func, "entry");
         self.builder.position_at_end(basic_block);
 
@@ -137,7 +157,7 @@ impl<'ctx> CodeGen<'ctx> {
             self.declare_var(name.clone(), alloca, ty.clone());
         }
 
-        self.compile_block(&func.body)?;
+        self.compile_block(body)?;
         
         self.exit_scope();
 
@@ -481,7 +501,15 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.context.i32_type().const_zero().into())
             }
             HirExprKind::Call(name, _, args, _) => {
-                let llvm_func = self.module.get_function(&name.as_str()).ok_or(format!("Function {} not found", name))?;
+                let name_str = name.as_str();
+                let llvm_name = if name_str.ends_with("::main") { "main" } else { &name_str };
+                let llvm_func = self.module.get_function(llvm_name)
+                    .or_else(|| {
+                        // Spec (body-less) functions are declared under their short name
+                        let short = name_str.split("::").last().unwrap_or(name_str.as_str());
+                        self.module.get_function(short)
+                    })
+                    .ok_or(format!("Function {} not found", name_str))?;
                 let mut llvm_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                 for arg in args {
                     llvm_args.push(self.compile_expr(arg)?.into());
@@ -868,13 +896,30 @@ impl<'ctx> CodeGen<'ctx> {
     }
 }
 
-pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), String> {
-    let context = Context::create();
+use inkwell::targets::TargetTriple;
+
+pub struct CompileOptions<'a> {
+    /// LLVM target triple for cross-compilation (None = host target).
+    pub target: Option<&'a str>,
+    /// When true, emit only an object file to `output_path`; skip linking.
+    pub emit_obj_only: bool,
+}
+
+impl Default for CompileOptions<'_> {
+    fn default() -> Self {
+        Self { target: None, emit_obj_only: false }
+    }
+}
+
+fn build_codegen<'ctx>(
+    hir: &HirProgram,
+    context: &'ctx Context,
+) -> Result<CodeGen<'ctx>, String> {
     let module = context.create_module("main_module");
     let builder = context.create_builder();
-    
+
     let mut codegen = CodeGen {
-        context: &context,
+        context,
         module,
         builder,
         scopes: Vec::new(),
@@ -883,14 +928,12 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         variants: hir.variants.clone(),
         loop_stack: Vec::new(),
     };
-    
-    // Predeclare structs
+
     for name in hir.structs.keys() {
         let struct_type = codegen.context.opaque_struct_type(name);
         codegen.structs.insert(name.clone(), struct_type);
     }
 
-    // Define structs
     for (name, fields) in &hir.structs {
         let mut field_types = Vec::new();
         for (_, ty) in fields {
@@ -899,47 +942,80 @@ pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), Stri
         let struct_type = codegen.structs.get(name).unwrap();
         struct_type.set_body(&field_types, false);
     }
-    
+
     for func in &hir.functions {
         codegen.declare_func(func)?;
     }
-    
     for func in &hir.functions {
         codegen.compile_func(func)?;
     }
 
+    Ok(codegen)
+}
+
+pub fn compile_to_binary(hir: &HirProgram, output_path: &str) -> Result<(), String> {
+    compile_with_options(hir, output_path, &CompileOptions::default())
+}
+
+pub fn compile_with_options(
+    hir: &HirProgram,
+    output_path: &str,
+    opts: &CompileOptions,
+) -> Result<(), String> {
+    let context = Context::create();
+    let codegen = build_codegen(hir, &context)?;
+
     if std::env::var("PRINT_IR").is_ok() {
         println!("{}", codegen.module.print_to_string().to_string());
     }
-    
+
     Target::initialize_all(&InitializationConfig::default());
-    let target_triple = TargetMachine::get_default_triple();
+
+    let target_triple = match opts.target {
+        Some(triple) => TargetTriple::create(triple),
+        None => TargetMachine::get_default_triple(),
+    };
+
     let target = Target::from_triple(&target_triple).map_err(|e| e.to_string())?;
-    
-    let target_machine = target.create_target_machine(
-        &target_triple,
-        "generic",
-        "",
-        OptimizationLevel::None,
-        RelocMode::Default,
-        CodeModel::Default,
-    ).ok_or("Failed to create target machine")?;
-    
+
+    let target_machine = target
+        .create_target_machine(
+            &target_triple,
+            "generic",
+            "",
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or("Failed to create target machine")?;
+
+    if opts.emit_obj_only {
+        // Write the object file directly to the requested output path.
+        let out = std::path::Path::new(output_path);
+        target_machine
+            .write_to_file(&codegen.module, FileType::Object, out)
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    // Full build: emit a temporary object file, then link.
     let obj_path = std::path::Path::new(output_path).with_extension("o");
-    target_machine.write_to_file(&codegen.module, FileType::Object, &obj_path).map_err(|e| e.to_string())?;
-    
+    target_machine
+        .write_to_file(&codegen.module, FileType::Object, &obj_path)
+        .map_err(|e| e.to_string())?;
+
     let status = std::process::Command::new("cc")
         .arg(&obj_path)
         .arg("-o")
         .arg(output_path)
         .status()
         .map_err(|e| format!("Failed to run cc: {}", e))?;
-        
+
     let _ = std::fs::remove_file(&obj_path);
-        
+
     if !status.success() {
         return Err("Linking failed".to_string());
     }
-    
+
     Ok(())
 }

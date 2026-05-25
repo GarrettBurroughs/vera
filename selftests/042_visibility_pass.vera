@@ -1,0 +1,11 @@
+// run-pass
+
+import other;
+
+func main(): i32 {
+    const x: i32 = other.public_func(); // Ok: public_func is pub
+    if x == 42 {
+        return 0;
+    }
+    return 1;
+}

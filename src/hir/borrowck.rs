@@ -42,7 +42,9 @@ impl BorrowChecker {
     fn check_function(&mut self, func: &HirFunc) {
         // We'll need some state for the function body
         let mut ctx = FuncBorrowCtx::new();
-        self.check_block(&func.body, &mut ctx);
+        if let Some(body) = &func.body {
+            self.check_block(body, &mut ctx);
+        }
     }
 
     fn check_block(&mut self, block: &super::HirBlock, ctx: &mut FuncBorrowCtx) {
