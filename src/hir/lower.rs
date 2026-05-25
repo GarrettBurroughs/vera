@@ -90,6 +90,7 @@ pub struct SymbolInfo {
     pub name: String,
     pub ty: HirType,
     pub is_const: bool,
+    pub span: crate::hir::Span,
 }
 
 pub struct SymbolTable {
@@ -115,7 +116,7 @@ impl SymbolTable {
         self.scopes.pop();
     }
 
-    pub fn define_symbol(&mut self, name: String, ty: HirType, is_const: bool) -> SymbolId {
+    pub fn define_symbol(&mut self, name: String, ty: HirType, is_const: bool, span: crate::hir::Span) -> SymbolId {
         let id = SymbolId(self.next_id);
         self.next_id += 1;
         
@@ -123,6 +124,7 @@ impl SymbolTable {
             name: name.clone(),
             ty,
             is_const,
+            span,
         };
         
         self.symbols.insert(id, info);
@@ -132,11 +134,11 @@ impl SymbolTable {
         id
     }
 
-    pub fn lookup(&self, name: &str) -> Option<(SymbolId, HirType, bool)> {
+    pub fn lookup(&self, name: &str) -> Option<(SymbolId, HirType, bool, crate::hir::Span)> {
         for scope in self.scopes.iter().rev() {
             if let Some(&id) = scope.get(name) {
                 let info = self.symbols.get(&id).unwrap();
-                return Some((id, info.ty.clone(), info.is_const));
+                return Some((id, info.ty.clone(), info.is_const, info.span));
             }
         }
         None
@@ -196,6 +198,7 @@ pub struct LoweringContext {
     in_unsafe_block: bool,
     pub resolver: crate::hir::name_resolution::NameResolver,
     pub current_file: FileId,
+    pub definition_map: std::collections::BTreeMap<crate::workspace::FileId, Vec<(crate::hir::Span, crate::hir::Span)>>,
 }
 
 impl LoweringContext {
@@ -222,6 +225,7 @@ impl LoweringContext {
                 module_to_file: BTreeMap::new(),
             },
             current_file: 0,
+            definition_map: std::collections::BTreeMap::new(),
         }
     }
 
@@ -407,12 +411,18 @@ impl LoweringContext {
         monomorphized_name
     }
 
-    fn declare_var(&mut self, name: String, ty: HirType, is_const: bool) -> SymbolId {
-        self.symbol_table.define_symbol(name, ty, is_const)
+    fn declare_var(&mut self, name: String, ty: HirType, is_const: bool, span: crate::hir::Span) -> SymbolId {
+        self.symbol_table.define_symbol(name, ty, is_const, span)
     }
 
-    fn lookup_var(&self, name: &str) -> Option<(SymbolId, HirType, bool)> {
-        self.symbol_table.lookup(name)
+    fn lookup_var(&mut self, name: &str, use_span: crate::hir::Span) -> Option<(SymbolId, HirType, bool, crate::hir::Span)> {
+        if let Some((id, ty, is_const, def_span)) = self.symbol_table.lookup(name) {
+            if !use_span.is_unknown() && !def_span.is_unknown() {
+                self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+            }
+            return Some((id, ty, is_const, def_span));
+        }
+        None
     }
 
     fn types_compatible(&self, expected: &HirType, found: &HirType) -> bool {
@@ -621,6 +631,7 @@ impl LoweringContext {
             enums: self.enums.clone(),
             variants: self.variants.clone(),
             functions,
+            definition_map: self.definition_map.clone(),
         }
     }
 
@@ -630,7 +641,7 @@ impl LoweringContext {
 
         let mut hir_params = Vec::new();
         for (p_name, p_ty) in &params {
-            let sym_id = self.declare_var(p_name.clone(), p_ty.clone(), false);
+            let sym_id = self.declare_var(p_name.clone(), p_ty.clone(), false, crate::hir::Span::unknown());
             hir_params.push((p_name.clone(), sym_id, p_ty.clone()));
         }
 
@@ -657,7 +668,7 @@ impl LoweringContext {
             
             self.enter_scope();
             ret_sym_id = if ret_type != HirType::Void {
-                Some(self.declare_var("result".to_string(), ret_type.clone(), true))
+                Some(self.declare_var("result".to_string(), ret_type.clone(), true, crate::hir::Span::unknown()))
             } else {
                 None
             };
@@ -696,7 +707,7 @@ impl LoweringContext {
         if let Some(ref_ty) = type_ref.refinement()
             && let Some(cond) = ref_ty.condition() {
                 self.enter_scope();
-                self.declare_var("self".to_string(), base_ty.clone(), true);
+                self.declare_var("self".to_string(), base_ty.clone(), true, crate::hir::Span::unknown());
                 let lowered_cond = self.lower_expr(&cond);
                 self.exit_scope();
                 return HirType::Refinement(Box::new(base_ty), Box::new(lowered_cond));
@@ -841,7 +852,7 @@ impl LoweringContext {
     fn declare_pattern_bindings(&mut self, pat: &HirPattern, val_ty: &HirType) {
         match pat {
             HirPattern::Binding(name) => {
-                self.declare_var(name.clone(), val_ty.clone(), true);
+                self.declare_var(name.clone(), val_ty.clone(), true, crate::hir::Span::unknown());
             }
             HirPattern::VariantCase(case_name, bindings) => {
                 if let HirType::Variant(v_name) = val_ty {
@@ -853,7 +864,7 @@ impl LoweringContext {
                     
                     if let Some(payload_tys) = payload_tys_opt {
                         for (b_name, b_ty) in bindings.iter().zip(payload_tys.iter()) {
-                            self.declare_var(b_name.clone(), b_ty.clone(), true);
+                            self.declare_var(b_name.clone(), b_ty.clone(), true, crate::hir::Span::unknown());
                         }
                     }
                 }
@@ -916,7 +927,9 @@ impl LoweringContext {
                     });
                 }
 
-                let sym_id = self.declare_var(name.clone(), declared_ty.clone(), is_const);
+                let name_span = let_stmt.name().map(|n| crate::hir::Span::new(self.current_file, n.text_range().start().into(), n.text_range().end().into())).unwrap_or_else(|| crate::hir::Span::unknown());
+
+                let sym_id = self.declare_var(name.clone(), declared_ty.clone(), is_const, name_span);
 
                 HirStmt::new(HirStmtKind::Let(name, sym_id, is_const, declared_ty, initializer), span)
             }
@@ -999,7 +1012,7 @@ impl LoweringContext {
                 };
                 
                 self.enter_scope();
-                let sym_id = self.declare_var(item_name.clone(), inner_ty, false); // iteration variable is not const
+                let sym_id = self.declare_var(item_name.clone(), inner_ty, false, crate::hir::Span::unknown()); // iteration variable is not const
                 let body = for_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
                 self.exit_scope();
                 
@@ -1033,7 +1046,7 @@ impl LoweringContext {
             }
             ast::Expr::NameRef(name_ref) => {
                 let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                if let Some((sym_id, ty, _is_const)) = self.lookup_var(&name) {
+                if let Some((sym_id, ty, _is_const, _)) = self.lookup_var(&name, span) {
                     HirExpr::new(HirExprKind::VarRef(Path::from_ident(name), sym_id, ty), span)
                 } else {
                     self.errors.push(SemanticError::UndefinedVariable { name: name.clone(), span: self.node_span(name_ref) });
@@ -1105,7 +1118,12 @@ impl LoweringContext {
                             let global_name = self.resolve_path(&[name.clone()]);
                             if self.functions.contains_key(&global_name) {
                                 is_direct = true;
-                                direct_name = global_name;
+                                direct_name = global_name.clone();
+                                let def_span = self.resolver.get_span(&global_name);
+                                let use_span = self.node_span(name_ref);
+                                if !use_span.is_unknown() && !def_span.is_unknown() {
+                                    self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+                                }
                             } else if self.generic_templates.funcs.contains_key(&global_name) {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name), span: self.node_span(call_expr) });
                             }
@@ -1118,7 +1136,12 @@ impl LoweringContext {
                             let global_name = self.resolve_path(&[mod_name.clone(), field_name.clone()]);
                             if self.functions.contains_key(&global_name) {
                                 is_direct = true;
-                                direct_name = global_name;
+                                direct_name = global_name.clone();
+                                let def_span = self.resolver.get_span(&global_name);
+                                let use_span = self.node_span(field_expr);
+                                if !use_span.is_unknown() && !def_span.is_unknown() {
+                                    self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+                                }
                             } else if self.generic_templates.funcs.contains_key(&global_name) {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", global_name), span: self.node_span(call_expr) });
                             }
@@ -1135,6 +1158,11 @@ impl LoweringContext {
                                     let mono_name = self.request_monomorphize_func(&global_name, args);
                                     is_direct = true;
                                     direct_name = mono_name;
+                                    let def_span = self.resolver.get_span(&global_name);
+                                    let use_span = self.node_span(&name_ref);
+                                    if !use_span.is_unknown() && !def_span.is_unknown() {
+                                        self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+                                    }
                                 }
                             } else {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("undefined generic function {}", name), span: self.node_span(call_expr) });
@@ -1216,11 +1244,13 @@ impl LoweringContext {
                     if op == BinaryOp::Assign {
                         if !lhs.is_lvalue() {
                             self.errors.push(SemanticError::Custom { message: "invalid assignment target: not an lvalue".to_string(), span: self.node_span(bin_expr) });
-                        } else if let HirExprKind::VarRef(name, _, _) = &lhs.kind
-                            && let Some((_, _, is_const)) = self.lookup_var(&name.as_str())
-                                && is_const {
+                        } else if let HirExprKind::VarRef(name, _, _) = &lhs.kind {
+                            if let Some((_, _, is_const, _)) = self.lookup_var(&name.as_str(), lhs.span) {
+                                if is_const {
                                     self.errors.push(SemanticError::ImmutableAssignment { name: name.to_string(), span: self.node_span(bin_expr) });
                                 }
+                            }
+                        }
                     }
 
                     if lhs.ty() != HirType::Error && rhs.ty() != HirType::Error {
@@ -1587,7 +1617,7 @@ impl LoweringContext {
                 
                 self.enter_scope();
                 for (name, ty) in params.iter().zip(param_tys.iter()) {
-                    self.declare_var(name.clone(), ty.clone(), false);
+                    self.declare_var(name.clone(), ty.clone(), false, crate::hir::Span::unknown());
                 }
                 
                 let body = closure.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, span));
@@ -1624,7 +1654,7 @@ impl LoweringContext {
                 for param in quant.params() {
                     let name = param.name().unwrap_or_default();
                     let ty = param.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
-                    let sym_id = self.declare_var(name.clone(), ty.clone(), true);
+                    let sym_id = self.declare_var(name.clone(), ty.clone(), true, crate::hir::Span::unknown());
                     params.push((name, sym_id, ty));
                 }
                 

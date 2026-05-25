@@ -7,11 +7,11 @@ use crate::hir::lower::SemanticError;
 #[derive(Debug, Default)]
 pub struct ModuleScope {
     pub module_name: String, // globally unique module name, e.g. "math" or "std::math"
-    pub funcs: BTreeMap<String, bool>, // name -> is_pub
-    pub structs: BTreeMap<String, bool>,
-    pub enums: BTreeMap<String, bool>,
-    pub variants: BTreeMap<String, bool>,
-    pub type_aliases: BTreeMap<String, bool>,
+    pub funcs: BTreeMap<String, (bool, crate::hir::Span)>, // name -> (is_pub, span)
+    pub structs: BTreeMap<String, (bool, crate::hir::Span)>,
+    pub enums: BTreeMap<String, (bool, crate::hir::Span)>,
+    pub variants: BTreeMap<String, (bool, crate::hir::Span)>,
+    pub type_aliases: BTreeMap<String, (bool, crate::hir::Span)>,
     
     // aliases
     pub module_aliases: BTreeMap<String, String>, // alias -> global module name
@@ -80,27 +80,27 @@ impl NameResolver {
 
             for s in file_data.ast.structs() {
                 if let Some(name) = s.name() {
-                    scope.structs.insert(name.text().to_string(), s.is_pub());
+                    scope.structs.insert(name.text().to_string(), (s.is_pub(), crate::hir::Span::new(file_id, name.text_range().start().into(), name.text_range().end().into())));
                 }
             }
             for e in file_data.ast.enums() {
                 if let Some(name) = e.name() {
-                    scope.enums.insert(name.text().to_string(), e.is_pub());
+                    scope.enums.insert(name.text().to_string(), (e.is_pub(), crate::hir::Span::new(file_id, name.text_range().start().into(), name.text_range().end().into())));
                 }
             }
             for v in file_data.ast.variants() {
                 if let Some(name) = v.name() {
-                    scope.variants.insert(name.text().to_string(), v.is_pub());
+                    scope.variants.insert(name.text().to_string(), (v.is_pub(), crate::hir::Span::new(file_id, name.text_range().start().into(), name.text_range().end().into())));
                 }
             }
             for f in file_data.ast.functions() {
                 if let Some(name) = f.name() {
-                    scope.funcs.insert(name.text().to_string(), f.is_pub());
+                    scope.funcs.insert(name.text().to_string(), (f.is_pub(), crate::hir::Span::new(file_id, name.text_range().start().into(), name.text_range().end().into())));
                 }
             }
             for a in file_data.ast.type_aliases() {
                 if let Some(name) = a.name() {
-                    scope.type_aliases.insert(name.text().to_string(), a.is_pub());
+                    scope.type_aliases.insert(name.text().to_string(), (a.is_pub(), crate::hir::Span::new(file_id, name.text_range().start().into(), name.text_range().end().into())));
                 }
             }
             
@@ -177,10 +177,10 @@ impl NameResolver {
                 // Check visibility
                 if let Some(&target_file_id) = self.module_to_file.get(target_mod_name) {
                     if let Some(target_scope) = self.scopes.get(&target_file_id) {
-                        let is_pub = target_scope.funcs.get(item_name).copied()
-                            .or_else(|| target_scope.structs.get(item_name).copied())
-                            .or_else(|| target_scope.enums.get(item_name).copied())
-                            .or_else(|| target_scope.type_aliases.get(item_name).copied())
+                        let is_pub = target_scope.funcs.get(item_name).map(|(is_pub, _)| *is_pub)
+                            .or_else(|| target_scope.structs.get(item_name).map(|(is_pub, _)| *is_pub))
+                            .or_else(|| target_scope.enums.get(item_name).map(|(is_pub, _)| *is_pub))
+                            .or_else(|| target_scope.type_aliases.get(item_name).map(|(is_pub, _)| *is_pub))
                             .unwrap_or(false);
                             
                         if !is_pub && current_file != target_file_id {
@@ -198,5 +198,23 @@ impl NameResolver {
             
             return Err(ResolutionError::UnknownModule(mod_name.clone()));
         }
+    }
+
+    pub fn get_span(&self, global_path: &str) -> crate::hir::Span {
+        let parts: Vec<&str> = global_path.split("::").collect();
+        if parts.len() == 2 {
+            let mod_name = parts[0];
+            let item_name = parts[1];
+            if let Some(&file_id) = self.module_to_file.get(mod_name) {
+                if let Some(scope) = self.scopes.get(&file_id) {
+                    if let Some((_, span)) = scope.funcs.get(item_name) { return *span; }
+                    if let Some((_, span)) = scope.structs.get(item_name) { return *span; }
+                    if let Some((_, span)) = scope.enums.get(item_name) { return *span; }
+                    if let Some((_, span)) = scope.variants.get(item_name) { return *span; }
+                    if let Some((_, span)) = scope.type_aliases.get(item_name) { return *span; }
+                }
+            }
+        }
+        crate::hir::Span::unknown()
     }
 }

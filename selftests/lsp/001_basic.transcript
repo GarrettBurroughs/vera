@@ -1,5 +1,5 @@
 SEND: {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
-EXPECT: {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"inlayHintProvider":true,"textDocumentSync":{"change":1,"openClose":true}}}}
+EXPECT: {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"definitionProvider":true,"inlayHintProvider":true,"textDocumentSync":{"change":1,"openClose":true}}}}
 SEND: {"jsonrpc":"2.0","method":"initialized","params":{}}
 SEND: {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test.vera","languageId":"vera","version":1,"text":"func main(): i32 {\n    return 0;\n}"}}}
 EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"$WORKSPACE_ROOT/test.vera"}}

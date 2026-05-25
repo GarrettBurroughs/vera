@@ -76,6 +76,20 @@ pub struct HirProgram {
     pub enums: std::collections::BTreeMap<String, Vec<String>>,
     pub variants: std::collections::BTreeMap<String, Vec<(String, Vec<HirType>)>>,
     pub functions: Vec<HirFunc>,
+    pub definition_map: std::collections::BTreeMap<crate::workspace::FileId, Vec<(Span, Span)>>,
+}
+
+impl HirProgram {
+    pub fn new() -> Self {
+        Self {
+            type_aliases: std::collections::BTreeMap::new(),
+            structs: std::collections::BTreeMap::new(),
+            enums: std::collections::BTreeMap::new(),
+            variants: std::collections::BTreeMap::new(),
+            functions: Vec::new(),
+            definition_map: std::collections::BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +125,10 @@ pub struct Span {
 impl Span {
     pub fn new(file_id: usize, start: u32, end: u32) -> Self {
         Self { file_id, start, end }
+    }
+
+    pub fn unknown() -> Self {
+        Self { file_id: 0, start: 0, end: 0 }
     }
 
     /// Returns true when no real location is available (the zero sentinel).

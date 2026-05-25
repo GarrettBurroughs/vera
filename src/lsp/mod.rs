@@ -4,6 +4,7 @@ use lsp_types::{
     TextDocumentSyncOptions, DidOpenTextDocumentParams, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, Diagnostic, DiagnosticSeverity, Range, Position,
     PublishDiagnosticsParams, InlayHint, InlayHintLabel, InlayHintParams,
+    GotoDefinitionParams, Location, GotoDefinitionResponse, OneOf,
 };
 use lsp_server::{Connection, Message, Request, RequestId, Response};
 use tracing::info;
@@ -21,7 +22,8 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
                 ..Default::default()
             },
         )),
-        inlay_hint_provider: Some(lsp_types::OneOf::Left(true)),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     })
     .unwrap();
@@ -101,6 +103,50 @@ fn main_loop(
                     }
                     
                     let result = serde_json::to_value(hints).unwrap();
+                    let resp = Response { id: req.id, result: Some(result), error: None };
+                    connection.sender.send(Message::Response(resp)).unwrap();
+                } else if req.method == "textDocument/definition" {
+                    let params: GotoDefinitionParams = serde_json::from_value(req.params).unwrap();
+                    let uri = params.text_document_position_params.text_document.uri;
+                    let uri_str = uri.to_string();
+                    let path_str = if uri_str.starts_with("file://") {
+                        uri_str[7..].to_string()
+                    } else {
+                        uri_str.clone()
+                    };
+                    let path = std::path::PathBuf::from(path_str);
+                    
+                    let mut result = serde_json::Value::Null;
+                    
+                    if let Some(&file_id) = qctx.workspace().files.iter().find_map(|(id, f)| {
+                        if f.path == path { Some(id) } else { None }
+                    }) {
+                        let source = qctx.workspace().files.get(&file_id).unwrap().source.clone();
+                        let pos = params.text_document_position_params.position;
+                        if let Some(byte_offset) = crate::diagnostics::position_to_byte_offset(&source, pos.line, pos.character) {
+                            if let Some(def_span) = qctx.query_definition(file_id, byte_offset) {
+                                if !def_span.is_unknown() {
+                                    let def_file_id = def_span.file_id;
+                                    if let Some(def_file) = qctx.workspace().files.get(&def_file_id) {
+                                        let def_source = def_file.source.clone();
+                                        let (start_line, start_col) = crate::diagnostics::byte_offset_to_position(&def_source, def_span.start);
+                                        let (end_line, end_col) = crate::diagnostics::byte_offset_to_position(&def_source, def_span.end);
+                                        let def_uri = format!("file://{}", def_file.path.display()).parse().unwrap();
+                                        
+                                        let location = Location {
+                                            uri: def_uri,
+                                            range: Range {
+                                                start: Position { line: start_line, character: start_col },
+                                                end: Position { line: end_line, character: end_col },
+                                            },
+                                        };
+                                        result = serde_json::to_value(location).unwrap();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
                     let resp = Response { id: req.id, result: Some(result), error: None };
                     connection.sender.send(Message::Response(resp)).unwrap();
                 }

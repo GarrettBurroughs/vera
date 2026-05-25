@@ -136,6 +136,30 @@ impl QueryContext {
         (&cache.program, &cache.errors)
     }
 
+    /// Query: find the definition span for the symbol at the given byte offset.
+    pub fn query_definition(&mut self, file_id: FileId, byte_offset: u32) -> Option<crate::hir::Span> {
+        let (hir, _) = self.query_hir_program();
+        let mut best_match = None;
+        let mut best_len = u32::MAX;
+        
+        eprintln!("query_definition: file_id={}, byte_offset={}", file_id, byte_offset);
+        
+        if let Some(uses) = hir.definition_map.get(&file_id) {
+            for (use_span, def_span) in uses {
+                eprintln!("  checking span {:?} -> {:?}", use_span, def_span);
+                if use_span.start <= byte_offset && use_span.end >= byte_offset {
+                    let len = use_span.end - use_span.start;
+                    eprintln!("    matched! len={}", len);
+                    if len < best_len {
+                        best_match = Some(*def_span);
+                        best_len = len;
+                    }
+                }
+            }
+        }
+        best_match
+    }
+
     /// Query: borrow-check the program (cached).
     ///
     /// Rebuilds the HIR first if needed.

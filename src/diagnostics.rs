@@ -112,6 +112,30 @@ pub fn byte_offset_to_position(source: &str, offset: u32) -> (u32, u32) {
     (line, col)
 }
 
+/// Convert a `(line, character)` LSP `Position` to a byte offset.
+pub fn position_to_byte_offset(source: &str, line: u32, col: u32) -> Option<u32> {
+    let mut current_line = 0;
+    let mut current_offset = 0;
+    
+    for (i, b) in source.bytes().enumerate() {
+        if current_line == line {
+            if (i - current_offset) as u32 == col {
+                return Some(i as u32);
+            }
+        }
+        if b == b'\n' {
+            current_line += 1;
+            current_offset = i + 1;
+        }
+    }
+    
+    if current_line == line && (source.len() - current_offset) as u32 == col {
+        return Some(source.len() as u32);
+    }
+    
+    None
+}
+
 /// Render a `Diagnostic` to a human-readable string.
 ///
 /// Set `color = true` to emit ANSI escape sequences for terminal output.
