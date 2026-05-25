@@ -64,13 +64,31 @@ pub struct HirFunc {
     pub assigns: Vec<HirExpr>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct HirBlock {
     pub statements: Vec<HirStmt>,
 }
 
 #[derive(Debug, Clone)]
-pub enum HirStmt {
+pub struct HirStmt {
+    pub kind: HirStmtKind,
+    pub span: Span,
+}
+
+impl HirStmt {
+    pub fn new(kind: HirStmtKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum HirStmtKind {
     Let(String, bool, HirType, HirExpr), // name, is_const, type, initializer
     Expr(HirExpr),
     Return(Option<HirExpr>),
@@ -104,7 +122,14 @@ pub enum QuantifierKind {
 }
 
 #[derive(Debug, Clone)]
-pub enum HirExpr {
+pub struct HirExpr {
+    pub kind: HirExprKind,
+    pub ty: HirType,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirExprKind {
     IntLiteral(i64, HirType),
     BoolLiteral(bool, HirType),
     BinaryOp(BinaryOp, Box<HirExpr>, Box<HirExpr>, HirType),
@@ -134,42 +159,47 @@ pub enum HirExpr {
 }
 
 impl HirExpr {
+    pub fn new(kind: HirExprKind, span: Span) -> Self {
+        let ty = match &kind {
+            HirExprKind::IntLiteral(_, ty) => ty.clone(),
+            HirExprKind::BoolLiteral(_, ty) => ty.clone(),
+            HirExprKind::BinaryOp(_, _, _, ty) => ty.clone(),
+            HirExprKind::UnaryOp(_, _, ty) => ty.clone(),
+            HirExprKind::VarRef(_, ty) => ty.clone(),
+            HirExprKind::Call(_, _, ty) => ty.clone(),
+            HirExprKind::CallIndirect(_, _, ty) => ty.clone(),
+            HirExprKind::If(_, _, _, ty) => ty.clone(),
+            HirExprKind::StructExpr(_, _, ty) => ty.clone(),
+            HirExprKind::FieldAccess(_, _, ty) => ty.clone(),
+            HirExprKind::EnumVariant(_, _, _, ty) => ty.clone(),
+            HirExprKind::VariantConstructor(_, _, _, ty) => ty.clone(),
+            HirExprKind::Match(_, _, ty) => ty.clone(),
+            HirExprKind::ArrayExpr(_, ty) => ty.clone(),
+            HirExprKind::IndexExpr(_, _, ty) => ty.clone(),
+            HirExprKind::SliceExpr(_, _, _, ty) => ty.clone(),
+            HirExprKind::Try(_, ty) => ty.clone(),
+            HirExprKind::ResultOk(_, ty) => ty.clone(),
+            HirExprKind::ResultErr(_, ty) => ty.clone(),
+            HirExprKind::Ref(_, _, ty) => ty.clone(),
+            HirExprKind::Deref(_, ty) => ty.clone(),
+            HirExprKind::Block(_, ty) => ty.clone(),
+            HirExprKind::Closure(_, _, _, ty) => ty.clone(),
+            HirExprKind::Quantifier(_, _, _, ty) => ty.clone(),
+            HirExprKind::Error => HirType::Error,
+        };
+        Self { kind, ty, span }
+    }
+
     pub fn ty(&self) -> HirType {
-        match self {
-            HirExpr::IntLiteral(_, ty) => ty.clone(),
-            HirExpr::BoolLiteral(_, ty) => ty.clone(),
-            HirExpr::BinaryOp(_, _, _, ty) => ty.clone(),
-            HirExpr::UnaryOp(_, _, ty) => ty.clone(),
-            HirExpr::VarRef(_, ty) => ty.clone(),
-            HirExpr::Call(_, _, ty) => ty.clone(),
-            HirExpr::CallIndirect(_, _, ty) => ty.clone(),
-            HirExpr::If(_, _, _, ty) => ty.clone(),
-            HirExpr::StructExpr(_, _, ty) => ty.clone(),
-            HirExpr::FieldAccess(_, _, ty) => ty.clone(),
-            HirExpr::EnumVariant(_, _, _, ty) => ty.clone(),
-            HirExpr::VariantConstructor(_, _, _, ty) => ty.clone(),
-            HirExpr::Match(_, _, ty) => ty.clone(),
-            HirExpr::ArrayExpr(_, ty) => ty.clone(),
-            HirExpr::IndexExpr(_, _, ty) => ty.clone(),
-            HirExpr::SliceExpr(_, _, _, ty) => ty.clone(),
-            HirExpr::Try(_, ty) => ty.clone(),
-            HirExpr::ResultOk(_, ty) => ty.clone(),
-            HirExpr::ResultErr(_, ty) => ty.clone(),
-            HirExpr::Ref(_, _, ty) => ty.clone(),
-            HirExpr::Deref(_, ty) => ty.clone(),
-            HirExpr::Block(_, ty) => ty.clone(),
-            HirExpr::Closure(_, _, _, ty) => ty.clone(),
-            HirExpr::Quantifier(_, _, _, ty) => ty.clone(),
-            HirExpr::Error => HirType::Error,
-        }
+        self.ty.clone()
     }
 
     pub fn is_lvalue(&self) -> bool {
-        matches!(self, 
-            HirExpr::VarRef(..) | 
-            HirExpr::FieldAccess(..) | 
-            HirExpr::IndexExpr(..) | 
-            HirExpr::Deref(..)
+        matches!(self.kind, 
+            HirExprKind::VarRef(..) | 
+            HirExprKind::FieldAccess(..) | 
+            HirExprKind::IndexExpr(..) | 
+            HirExprKind::Deref(..)
         )
     }
 }

@@ -16,7 +16,7 @@ mod tests {
         let is_build_fail = content.contains("// build-fail") || content.contains("// compile-fail");
         let is_verify_fail = content.contains("// verify-fail");
 
-        let mut should_run = is_run_pass || is_build_pass || is_build_fail || is_verify_fail;
+        let should_run = is_run_pass || is_build_pass || is_build_fail || is_verify_fail;
         
         if !should_run {
             // No recognized directive, default to treating as run-pass or skip?

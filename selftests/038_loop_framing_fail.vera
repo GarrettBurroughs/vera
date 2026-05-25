@@ -1,0 +1,22 @@
+// verify-fail
+// Attempt to mutate memory outside the loop framing
+func mutate_loop(arr: mut ref array[i32, 5], p: mut ptr i32)
+spec {
+    requires valid(p);
+    assigns *p; // Only declares assigns for p, not for arr!
+} {
+    var i: i32 = 0;
+    while i < 5 spec {
+        invariant i >= 0;
+        invariant i <= 5;
+        decreases 5 - i;
+        // missing loop_assigns!
+    } {
+        // This should fail verification because we don't declare assigns for arr or loop_assigns
+        arr[i] = i;
+        unsafe {
+            *p = *p + 1;
+        }
+        i = i + 1;
+    }
+}

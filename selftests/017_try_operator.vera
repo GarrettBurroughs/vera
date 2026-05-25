@@ -1,6 +1,6 @@
 // run-pass
-func parse_int(valid: bool): result[i32, i32] {
-    if valid {
+func parse_int(is_valid: bool): result[i32, i32] {
+    if is_valid {
         return Ok(42);
     } else {
         return Err(1);

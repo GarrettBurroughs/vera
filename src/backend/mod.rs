@@ -6,7 +6,7 @@ use inkwell::module::Module;
 use inkwell::values::{PointerValue, BasicValueEnum, BasicMetadataValueEnum};
 use inkwell::types::{BasicTypeEnum, BasicType};
 use std::collections::BTreeMap;
-use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
+use crate::hir::{HirExprKind, HirStmtKind, HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
 
 struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -177,8 +177,8 @@ impl<'ctx> CodeGen<'ctx> {
             return Ok(()); // Block already terminated, skip dead code
         }
 
-        match stmt {
-            HirStmt::Return(expr_opt) => {
+        match &stmt.kind {
+            HirStmtKind::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
                     let val = self.compile_expr(expr)?;
                     self.builder.build_return(Some(&val)).unwrap();
@@ -196,7 +196,7 @@ impl<'ctx> CodeGen<'ctx> {
                     self.builder.build_return(Some(&default_val)).unwrap();
                 }
             }
-            HirStmt::Let(name, _is_const, ty, initializer) => {
+            HirStmtKind::Let(name, _is_const, ty, initializer) => {
                 let llvm_ty = self.lower_type(ty)?;
                 let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
                 self.declare_var(name.clone(), alloca, ty.clone());
@@ -204,10 +204,10 @@ impl<'ctx> CodeGen<'ctx> {
                 let init_val = self.compile_expr(initializer)?;
                 self.builder.build_store(alloca, init_val).unwrap();
             }
-            HirStmt::Expr(expr) => {
+            HirStmtKind::Expr(expr) => {
                 self.compile_expr(expr)?;
             }
-            HirStmt::While(cond, body, _invariants, _decreases, _assigns) => {
+            HirStmtKind::While(cond, body, _invariants, _decreases, _assigns) => {
                 let parent_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                 
                 let header_block = self.context.append_basic_block(parent_func, "while.cond");
@@ -235,7 +235,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // 3. Continue compiling after loop in merge block
                 self.builder.position_at_end(merge_block);
             }
-            HirStmt::For(item_name, iterable, body, _assigns) => {
+            HirStmtKind::For(item_name, iterable, body, _assigns) => {
                 let iter_val = self.compile_expr(iterable)?;
                 let iter_ty = iterable.ty();
 
@@ -304,42 +304,42 @@ impl<'ctx> CodeGen<'ctx> {
                 self.loop_stack.pop();
                 self.builder.position_at_end(merge_block);
             }
-            HirStmt::Break => {
+            HirStmtKind::Break => {
                 if let Some((_, merge_block)) = self.loop_stack.last() {
                     self.builder.build_unconditional_branch(*merge_block).unwrap();
                 } else {
                     return Err("break statement outside of loop".into());
                 }
             }
-            HirStmt::Continue => {
+            HirStmtKind::Continue => {
                 if let Some((header_block, _)) = self.loop_stack.last() {
                     self.builder.build_unconditional_branch(*header_block).unwrap();
                 } else {
                     return Err("continue statement outside of loop".into());
                 }
             }
-            HirStmt::GhostBlock(_) => {
+            HirStmtKind::GhostBlock(_) => {
                 // Ghost blocks are purely for verification and are completely erased during compilation
                 return Ok(());
             }
-            HirStmt::Assert(_) | HirStmt::Assume(_) => {
+            HirStmtKind::Assert(_) | HirStmtKind::Assume(_) => {
                 // Verification statements are erased during code generation.
             }
-            HirStmt::Error => {}
+            HirStmtKind::Error => {}
         }
         Ok(())
     }
 
     fn compile_lvalue(&mut self, expr: &HirExpr) -> Result<PointerValue<'ctx>, String> {
-        match expr {
-            HirExpr::VarRef(name, _) => {
+        match &expr.kind {
+            HirExprKind::VarRef(name, _) => {
                 if let Some((alloca, _)) = self.lookup_var(name) {
                     Ok(alloca)
                 } else {
                     Err(format!("Undefined variable in lvalue: {}", name))
                 }
             }
-            HirExpr::FieldAccess(base, field_name, _) => {
+            HirExprKind::FieldAccess(base, field_name, _) => {
                 let base_ptr = self.compile_lvalue(base)?;
                 let base_ty = base.ty();
                 let struct_name = if let HirType::Struct(s) = base_ty { s } else { return Err("Field access on non-struct".into()); };
@@ -348,7 +348,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let field_idx = fields.iter().position(|(n, _)| n == field_name).unwrap() as u32;
                 Ok(self.builder.build_struct_gep(*struct_type, base_ptr, field_idx, "field_ptr").unwrap())
             }
-            HirExpr::IndexExpr(base, idx, _) => {
+            HirExprKind::IndexExpr(base, idx, _) => {
                 let base_ptr = self.compile_lvalue(base)?;
                 let base_ty = base.ty();
                 let idx_val = self.compile_expr(idx)?.into_int_value();
@@ -368,7 +368,7 @@ impl<'ctx> CodeGen<'ctx> {
                     _ => Err("Index on non-array/slice".into()),
                 }
             }
-            HirExpr::Deref(inner, _) => {
+            HirExprKind::Deref(inner, _) => {
                 let inner_val = self.compile_expr(inner)?.into_pointer_value();
                 Ok(inner_val)
             }
@@ -377,17 +377,17 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn compile_expr(&mut self, expr: &HirExpr) -> Result<BasicValueEnum<'ctx>, String> {
-        match expr {
-            HirExpr::IntLiteral(val, _) => {
+        match &expr.kind {
+            HirExprKind::IntLiteral(val, _) => {
                 Ok(self.context.i32_type().const_int(*val as u64, false).into())
             }
-            HirExpr::BoolLiteral(val, _) => {
+            HirExprKind::BoolLiteral(val, _) => {
                 Ok(self.context.bool_type().const_int(if *val { 1 } else { 0 }, false).into())
             }
-            HirExpr::EnumVariant(_, _, val, _) => {
+            HirExprKind::EnumVariant(_, _, val, _) => {
                 Ok(self.context.i32_type().const_int(*val, false).into())
             }
-            HirExpr::VarRef(name, _) => {
+            HirExprKind::VarRef(name, _) => {
                 if let Some((alloca, ty)) = self.lookup_var(name) {
                     let llvm_ty = self.lower_type(&ty)?;
                     let val = self.builder.build_load(llvm_ty, alloca, name).unwrap();
@@ -396,7 +396,7 @@ impl<'ctx> CodeGen<'ctx> {
                     Err(format!("Variable {} not found in LLVM codegen", name))
                 }
             }
-            HirExpr::BinaryOp(op, lhs, rhs, _ty) => {
+            HirExprKind::BinaryOp(op, lhs, rhs, _ty) => {
                 if *op == BinaryOp::Assign {
                     let rhs_val = self.compile_expr(rhs)?;
                     let lhs_ptr = self.compile_lvalue(lhs)?;
@@ -433,7 +433,7 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 Ok(res)
             }
-            HirExpr::UnaryOp(op, inner, _ty) => {
+            HirExprKind::UnaryOp(op, inner, _ty) => {
                 let inner_ty = inner.ty();
                 let inner_val = self.compile_expr(inner)?;
                 
@@ -449,7 +449,7 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 Ok(res)
             }
-            HirExpr::If(cond, then_block, else_block_opt, _) => {
+            HirExprKind::If(cond, then_block, else_block_opt, _) => {
                 let cond_val = self.compile_expr(cond)?.into_int_value();
                 
                 let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
@@ -480,7 +480,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // Return dummy value since we're using Void return for `if` statements right now.
                 Ok(self.context.i32_type().const_zero().into())
             }
-            HirExpr::Call(name, args, _) => {
+            HirExprKind::Call(name, args, _) => {
                 let llvm_func = self.module.get_function(name).ok_or(format!("Function {} not found", name))?;
                 let mut llvm_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                 for arg in args {
@@ -492,7 +492,7 @@ impl<'ctx> CodeGen<'ctx> {
                     inkwell::values::ValueKind::Instruction(_) => Ok(self.context.i32_type().const_zero().into()),
                 }
             }
-            HirExpr::CallIndirect(callee, args, ty) => {
+            HirExprKind::CallIndirect(callee, args, ty) => {
                 let callee_val = self.compile_expr(callee)?.into_struct_value();
                 let fn_ptr = self.builder.build_extract_value(callee_val, 0, "fn_ptr").unwrap().into_pointer_value();
                 let env_ptr = self.builder.build_extract_value(callee_val, 1, "env_ptr").unwrap().into_pointer_value();
@@ -515,7 +515,7 @@ impl<'ctx> CodeGen<'ctx> {
                     inkwell::values::ValueKind::Instruction(_) => Ok(self.context.i32_type().const_zero().into()),
                 }
             }
-            HirExpr::StructExpr(name, fields, _) => {
+            HirExprKind::StructExpr(name, fields, _) => {
                 let struct_type = *self.structs.get(name).unwrap();
                 let alloca = self.builder.build_alloca(struct_type, "struct_init").unwrap();
                 
@@ -531,7 +531,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let val = self.builder.build_load(struct_type, alloca, "struct_val").unwrap();
                 Ok(val)
             }
-            HirExpr::FieldAccess(base, field_name, _) => {
+            HirExprKind::FieldAccess(base, field_name, _) => {
                 let base_ty = base.ty();
                 let struct_name = if let HirType::Struct(s) = base_ty { s } else { unreachable!() };
                 
@@ -542,12 +542,12 @@ impl<'ctx> CodeGen<'ctx> {
                 let res = self.builder.build_extract_value(base_val.into_struct_value(), field_idx as u32, "extract").unwrap();
                 Ok(res)
             }
-            HirExpr::VariantConstructor(variant_name, case_name, args, ty) => {
+            HirExprKind::VariantConstructor(variant_name, case_name, args, ty) => {
                 let variant_ty = self.lower_type(ty)?;
                 let ptr = self.builder.build_alloca(variant_ty, "variant_alloca").unwrap();
 
                 let cases = self.variants.get(variant_name).unwrap();
-                let case_idx = cases.iter().position(|(n, _)| n == case_name).unwrap();
+                let case_idx = cases.iter().position(|(n, _)| *n == *case_name).unwrap();
 
                 let tag_ptr = self.builder.build_struct_gep(variant_ty, ptr, 0, "tag_ptr").unwrap();
                 self.builder.build_store(tag_ptr, self.context.i32_type().const_int(case_idx as u64, false)).unwrap();
@@ -572,7 +572,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let val = self.builder.build_load(variant_ty, ptr, "variant_val").unwrap();
                 Ok(val)
             }
-            HirExpr::Match(target, arms, match_ty) => {
+            HirExprKind::Match(target, arms, match_ty) => {
                 let target_val = self.compile_expr(target)?;
                 let target_ty_hir = target.ty();
                 let variant_name = if let HirType::Variant(n) = target_ty_hir { n } else { return Err("Match target must be a variant".into()); };
@@ -593,7 +593,7 @@ impl<'ctx> CodeGen<'ctx> {
                 
                 for (pattern, arm_expr) in arms {
                     if let HirPattern::VariantCase(case_name, bindings) = pattern {
-                        let case_idx = cases.iter().position(|(n, _)| n == case_name).unwrap();
+                        let case_idx = cases.iter().position(|(n, _)| *n == *case_name).unwrap();
                         let case_bb = self.context.append_basic_block(function, &format!("match_case_{}", case_name));
                         switch_cases.push((self.context.i32_type().const_int(case_idx as u64, false), case_bb));
                         case_blocks.push((case_idx, bindings, arm_expr, case_bb));
@@ -649,7 +649,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let res = self.builder.build_load(res_llvm_ty, res_ptr, "match_res_val").unwrap();
                 Ok(res)
             }
-            HirExpr::ArrayExpr(elements, ty) => {
+            HirExprKind::ArrayExpr(elements, ty) => {
                 let arr_ty = self.lower_type(ty)?;
                 let ptr = self.builder.build_alloca(arr_ty, "array_alloca").unwrap();
                 for (i, el) in elements.iter().enumerate() {
@@ -661,7 +661,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let arr_val = self.builder.build_load(arr_ty, ptr, "arr_val").unwrap();
                 Ok(arr_val)
             }
-            HirExpr::IndexExpr(base, idx, ty) => {
+            HirExprKind::IndexExpr(base, idx, ty) => {
                 let base_val = self.compile_expr(base)?;
                 let idx_val = self.compile_expr(idx)?.into_int_value();
                 
@@ -687,7 +687,7 @@ impl<'ctx> CodeGen<'ctx> {
                     _ => unreachable!()
                 }
             }
-            HirExpr::SliceExpr(base, start, end, _ty) => {
+            HirExprKind::SliceExpr(base, start, end, _ty) => {
                 let base_val = self.compile_expr(base)?;
                 let start_val = self.compile_expr(start)?.into_int_value();
                 let end_val = self.compile_expr(end)?.into_int_value();
@@ -726,7 +726,7 @@ impl<'ctx> CodeGen<'ctx> {
                 
                 Ok(slice_struct.into())
             }
-            HirExpr::ResultOk(inner, ty) => {
+            HirExprKind::ResultOk(inner, ty) => {
                 let inner_val = self.compile_expr(inner)?;
                 let res_ty_llvm = self.lower_type(ty)?.into_struct_type();
                 let mut res_struct = res_ty_llvm.get_undef();
@@ -734,7 +734,7 @@ impl<'ctx> CodeGen<'ctx> {
                 res_struct = self.builder.build_insert_value(res_struct, inner_val, 1, "ok_val").unwrap().into_struct_value();
                 Ok(res_struct.into())
             }
-            HirExpr::ResultErr(inner, ty) => {
+            HirExprKind::ResultErr(inner, ty) => {
                 let inner_val = self.compile_expr(inner)?;
                 let res_ty_llvm = self.lower_type(ty)?.into_struct_type();
                 let mut res_struct = res_ty_llvm.get_undef();
@@ -742,7 +742,7 @@ impl<'ctx> CodeGen<'ctx> {
                 res_struct = self.builder.build_insert_value(res_struct, inner_val, 2, "err_val").unwrap().into_struct_value();
                 Ok(res_struct.into())
             }
-            HirExpr::Try(inner, _ok_ty) => {
+            HirExprKind::Try(inner, _ok_ty) => {
                 let inner_val = self.compile_expr(inner)?.into_struct_value();
                 let tag = self.builder.build_extract_value(inner_val, 0, "tag").unwrap().into_int_value();
                 let is_err = self.builder.build_int_compare(inkwell::IntPredicate::EQ, tag, self.context.i32_type().const_int(1, false), "is_err").unwrap();
@@ -760,22 +760,22 @@ impl<'ctx> CodeGen<'ctx> {
                 let ok_val = self.builder.build_extract_value(inner_val, 1, "ok_val").unwrap();
                 Ok(ok_val)
             }
-            HirExpr::Ref(inner, _, _) => {
+            HirExprKind::Ref(inner, _, _) => {
                 let ptr = self.compile_lvalue(inner)?;
                 Ok(ptr.into())
             }
-            HirExpr::Deref(inner, _) => {
+            HirExprKind::Deref(inner, _) => {
                 let inner_val = self.compile_expr(inner)?.into_pointer_value();
                 let ty = self.lower_type(&expr.ty())?;
                 Ok(self.builder.build_load(ty, inner_val, "deref").unwrap())
             }
-            HirExpr::Block(block, _) => {
+            HirExprKind::Block(block, _) => {
                 let mut last_val = None;
                 for stmt in &block.statements {
                     if self.builder.get_insert_block().unwrap().get_terminator().is_some() {
                         break;
                     }
-                    if let HirStmt::Expr(e) = stmt {
+                    if let HirStmtKind::Expr(e) = &stmt.kind {
                         last_val = Some(self.compile_expr(e)?);
                     } else {
                         self.compile_stmt(stmt)?;
@@ -788,7 +788,7 @@ impl<'ctx> CodeGen<'ctx> {
                     Ok(self.context.i32_type().const_zero().into()) // dummy void
                 }
             }
-            HirExpr::Closure(params, body, captures, ty) => {
+            HirExprKind::Closure(params, body, captures, ty) => {
                 let mut env_types = Vec::new();
                 let mut cap_tys = Vec::new();
                 for cap in captures {
@@ -830,7 +830,7 @@ impl<'ctx> CodeGen<'ctx> {
                         let local_ptr = self.builder.build_alloca(env_types[i], cap).unwrap();
                         let val = self.builder.build_load(env_types[i], field_ptr, cap).unwrap();
                         self.builder.build_store(local_ptr, val).unwrap();
-                        self.declare_var(cap.clone(), local_ptr, cap_tys[i].clone());
+                        self.declare_var(cap.to_string(), local_ptr, cap_tys[i].clone());
                     }
                     
                     for (i, param) in params.iter().enumerate() {
@@ -838,7 +838,7 @@ impl<'ctx> CodeGen<'ctx> {
                         let param_llvm_ty = fn_param_tys[i + 1];
                         let local_ptr = self.builder.build_alloca(BasicTypeEnum::try_from(param_llvm_ty).unwrap(), param).unwrap();
                         self.builder.build_store(local_ptr, param_val).unwrap();
-                        self.declare_var(param.clone(), local_ptr, ptys[i].clone());
+                        self.declare_var(param.to_string(), local_ptr, ptys[i].clone());
                     }
                     
                     let body_val = self.compile_expr(body)?;
@@ -860,10 +860,10 @@ impl<'ctx> CodeGen<'ctx> {
                     Err("Closure must have Func type".into())
                 }
             }
-            HirExpr::Quantifier(_, _, _, _) => {
+            HirExprKind::Quantifier(_, _, _, _) => {
                 Ok(self.context.i32_type().const_zero().into()) // dummy
             }
-            HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
+            HirExprKind::Error => Err("Cannot compile HirExprKind::Error".into()),
         }
     }
 }

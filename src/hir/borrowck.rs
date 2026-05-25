@@ -1,5 +1,6 @@
-use super::{HirProgram, HirFunc, HirStmt, HirExpr, BinaryOp};
-use std::collections::HashSet;
+use super::{BinaryOp};
+use crate::hir::{HirBlock, HirExpr, HirFunc, HirProgram, HirStmt, HirExprKind, HirStmtKind};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BorrowError {
@@ -53,22 +54,22 @@ impl BorrowChecker {
     }
 
     fn check_stmt(&mut self, stmt: &HirStmt, ctx: &mut FuncBorrowCtx) {
-        match stmt {
-            HirStmt::Let(name, _is_const, _ty, initializer) => {
+        match &stmt.kind {
+            HirStmtKind::Let(name, _is_const, _ty, initializer) => {
                 self.check_expr(initializer, ctx);
                 ctx.declare_var(name.clone());
             }
-            HirStmt::Expr(expr) => {
+            HirStmtKind::Expr(expr) => {
                 self.check_expr(expr, ctx);
             }
-            HirStmt::Return(Some(expr)) => {
+            HirStmtKind::Return(Some(expr)) => {
                 self.check_expr(expr, ctx);
             }
-            HirStmt::Return(None) => {}
-            HirStmt::Assert(expr) | HirStmt::Assume(expr) => {
+            HirStmtKind::Return(None) => {}
+            HirStmtKind::Assert(expr) | HirStmtKind::Assume(expr) => {
                 self.check_expr(expr, ctx);
             }
-            HirStmt::While(cond, body, invariants, decreases, assigns) => {
+            HirStmtKind::While(cond, body, invariants, decreases, assigns) => {
                 self.check_expr(cond, ctx);
                 for inv in invariants {
                     self.check_expr(inv, ctx);
@@ -78,7 +79,7 @@ impl BorrowChecker {
                 }
                 self.check_block(body, ctx);
             }
-            HirStmt::For(name, iterable, body, assigns) => {
+            HirStmtKind::For(name, iterable, body, assigns) => {
                 self.check_expr(iterable, ctx);
                 // Inline block checking here so we can declare the iteration variable
                 // inside the same scope that the block body uses. Calling check_block
@@ -90,21 +91,21 @@ impl BorrowChecker {
                 }
                 ctx.exit_scope();
             }
-            HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
-            HirStmt::GhostBlock(body) => {
+            HirStmtKind::Break | HirStmtKind::Continue | HirStmtKind::Error => {}
+            HirStmtKind::GhostBlock(body) => {
                 self.check_block(body, ctx);
             }
         }
     }
 
     fn check_expr(&mut self, expr: &HirExpr, ctx: &mut FuncBorrowCtx) {
-        match expr {
-            HirExpr::VarRef(name, _) => {
+        match &expr.kind {
+            HirExprKind::VarRef(name, _) => {
                 if let Err(e) = ctx.check_read(name) {
                     self.errors.push(e);
                 }
             }
-            HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
+            HirExprKind::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
                 self.check_expr(rhs, ctx);
                 if let Some(name) = get_root_var(lhs)
                     && let Err(e) = ctx.check_write(&name) {
@@ -113,11 +114,11 @@ impl BorrowChecker {
                 // also check the lhs itself for array indexing, field access (reads of indices)
                 self.check_expr_lvalue(lhs, ctx);
             }
-            HirExpr::BinaryOp(_, lhs, rhs, _) => {
+            HirExprKind::BinaryOp(_, lhs, rhs, _) => {
                 self.check_expr(lhs, ctx);
                 self.check_expr(rhs, ctx);
             }
-            HirExpr::Ref(inner, is_mut, _) => {
+            HirExprKind::Ref(inner, is_mut, _) => {
                 if let Some(name) = get_root_var(inner) {
                     if *is_mut {
                         if let Err(e) = ctx.borrow_mut(&name) {
@@ -130,66 +131,66 @@ impl BorrowChecker {
                 // Also check inner expression for things like array indices
                 self.check_expr_lvalue(inner, ctx);
             }
-            HirExpr::UnaryOp(_, inner, _) | HirExpr::Deref(inner, _) | HirExpr::FieldAccess(inner, _, _) => {
+            HirExprKind::UnaryOp(_, inner, _) | HirExprKind::Deref(inner, _) | HirExprKind::FieldAccess(inner, _, _) => {
                 self.check_expr(inner, ctx);
             }
-            HirExpr::Call(_, args, _) | HirExpr::VariantConstructor(_, _, args, _) | HirExpr::ArrayExpr(args, _) => {
+            HirExprKind::Call(_, args, _) | HirExprKind::VariantConstructor(_, _, args, _) | HirExprKind::ArrayExpr(args, _) => {
                 for arg in args {
                     self.check_expr(arg, ctx);
                 }
             }
-            HirExpr::CallIndirect(callee, args, _) => {
+            HirExprKind::CallIndirect(callee, args, _) => {
                 self.check_expr(callee, ctx);
                 for arg in args {
                     self.check_expr(arg, ctx);
                 }
             }
-            HirExpr::If(cond, then_b, else_b, _) => {
+            HirExprKind::If(cond, then_b, else_b, _) => {
                 self.check_expr(cond, ctx);
                 self.check_block(then_b, ctx);
                 if let Some(e) = else_b {
                     self.check_block(e, ctx);
                 }
             }
-            HirExpr::Match(cond, arms, _) => {
+            HirExprKind::Match(cond, arms, _) => {
                 self.check_expr(cond, ctx);
                 for (_, expr) in arms {
                     self.check_expr(expr, ctx);
                 }
             }
-            HirExpr::StructExpr(_, fields, _) => {
+            HirExprKind::StructExpr(_, fields, _) => {
                 for (_, expr) in fields {
                     self.check_expr(expr, ctx);
                 }
             }
-            HirExpr::IndexExpr(base, idx, _) => {
+            HirExprKind::IndexExpr(base, idx, _) => {
                 self.check_expr(base, ctx);
                 self.check_expr(idx, ctx);
             }
-            HirExpr::SliceExpr(base, start, end, _) => {
+            HirExprKind::SliceExpr(base, start, end, _) => {
                 self.check_expr(base, ctx);
                 self.check_expr(start, ctx);
                 self.check_expr(end, ctx);
             }
-            HirExpr::Try(inner, _) | HirExpr::ResultOk(inner, _) | HirExpr::ResultErr(inner, _) => {
+            HirExprKind::Try(inner, _) | HirExprKind::ResultOk(inner, _) | HirExprKind::ResultErr(inner, _) => {
                 self.check_expr(inner, ctx);
             }
-            HirExpr::Block(block, _) => {
+            HirExprKind::Block(block, _) => {
                 self.check_block(block, ctx);
             }
-            HirExpr::Closure(_, body, _, _) | HirExpr::Quantifier(_, _, body, _) => {
+            HirExprKind::Closure(_, body, _, _) | HirExprKind::Quantifier(_, _, body, _) => {
                 self.check_expr(body, ctx);
             }
-            HirExpr::IntLiteral(_, _) | HirExpr::BoolLiteral(_, _) | HirExpr::EnumVariant(_, _, _, _) | HirExpr::Error => {}
+            HirExprKind::IntLiteral(_, _) | HirExprKind::BoolLiteral(_, _) | HirExprKind::EnumVariant(_, _, _, _) | HirExprKind::Error => {}
         }
     }
 
     fn check_expr_lvalue(&mut self, expr: &HirExpr, ctx: &mut FuncBorrowCtx) {
-        match expr {
-            HirExpr::IndexExpr(_base, idx, _) => {
+        match &expr.kind {
+            HirExprKind::IndexExpr(_base, idx, _) => {
                 self.check_expr(idx, ctx);
             }
-            HirExpr::FieldAccess(base, _, _) | HirExpr::Deref(base, _) => {
+            HirExprKind::FieldAccess(base, _, _) | HirExprKind::Deref(base, _) => {
                 self.check_expr_lvalue(base, ctx);
             }
             _ => {}
@@ -198,11 +199,11 @@ impl BorrowChecker {
 }
 
 fn get_root_var(expr: &HirExpr) -> Option<String> {
-    match expr {
-        HirExpr::VarRef(name, _) => Some(name.clone()),
-        HirExpr::FieldAccess(base, _, _) => get_root_var(base),
-        HirExpr::IndexExpr(base, _, _) => get_root_var(base),
-        HirExpr::Deref(_base, _) => None, // Deref breaks the root var path, since it's a pointer indirection
+    match &expr.kind {
+        HirExprKind::VarRef(name, _) => Some(name.clone()),
+        HirExprKind::FieldAccess(base, _, _) => get_root_var(base),
+        HirExprKind::IndexExpr(base, _, _) => get_root_var(base),
+        HirExprKind::Deref(_base, _) => None, // Deref breaks the root var path, since it's a pointer indirection
         _ => None,
     }
 }

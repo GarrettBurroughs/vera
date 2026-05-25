@@ -1,0 +1,8 @@
+// verify-fail
+type NonZero = i32 where (self != 0);
+
+func safe_divide(num: i32, den: i32): i32 {
+    // Missing if den == 0 check
+    const valid_den: NonZero = den; // Should fail to prove den != 0
+    return num / valid_den;
+}

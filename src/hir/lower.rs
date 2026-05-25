@@ -2,7 +2,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 use std::collections::BTreeMap;
 use crate::parser::ast::{self, AstNode};
-use crate::hir::{HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
+use crate::hir::{Span, HirExprKind, HirStmtKind, HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum SemanticError {
@@ -701,7 +701,7 @@ impl LoweringContext {
                     });
                 }
                 
-                HirStmt::Return(expr)
+                HirStmt::new(HirStmtKind::Return(expr), Span::default())
             }
             ast::Stmt::LetStmt(let_stmt) => {
                 let name = let_stmt.name().map(|n| n.text().to_string()).unwrap_or_default();
@@ -710,7 +710,7 @@ impl LoweringContext {
                 let initializer = if let Some(expr) = let_stmt.initializer() {
                     self.lower_expr(&expr)
                 } else {
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 };
                 
                 let declared_ty = if let Some(ty_ref) = let_stmt.ty() {
@@ -728,32 +728,32 @@ impl LoweringContext {
 
                 self.declare_var(name.clone(), declared_ty.clone(), is_const);
 
-                HirStmt::Let(name, is_const, declared_ty, initializer)
+                HirStmt::new(HirStmtKind::Let(name, is_const, declared_ty, initializer), Span::default())
             }
             ast::Stmt::ExprStmt(expr_stmt) => {
                 if let Some(expr) = expr_stmt.expr() {
-                    HirStmt::Expr(self.lower_expr(&expr))
+                    HirStmt::new(HirStmtKind::Expr(self.lower_expr(&expr)), Span::default())
                 } else {
-                    HirStmt::Error
+                    HirStmt::new(HirStmtKind::Error, Span::default())
                 }
             }
             ast::Stmt::IfExpr(if_expr) => {
-                HirStmt::Expr(self.lower_if_expr(if_expr))
+                HirStmt::new(HirStmtKind::Expr(self.lower_if_expr(&if_expr)), Span::default())
             }
             ast::Stmt::AssertStmt(assert_stmt) => {
-                let expr = assert_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
-                HirStmt::Assert(expr)
+                let expr = assert_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                HirStmt::new(HirStmtKind::Assert(expr), Span::default())
             }
             ast::Stmt::AssumeStmt(assume_stmt) => {
-                let expr = assume_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
-                HirStmt::Assume(expr)
+                let expr = assume_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                HirStmt::new(HirStmtKind::Assume(expr), Span::default())
             }
             ast::Stmt::GhostBlock(ghost_block) => {
                 let block = ghost_block.block().map(|b| self.lower_block(&b)).unwrap_or_else(|| HirBlock { statements: Vec::new() });
-                HirStmt::GhostBlock(block)
+                HirStmt::new(HirStmtKind::GhostBlock(block), Span::default())
             }
             ast::Stmt::WhileStmt(while_stmt) => {
-                let cond = while_stmt.condition().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let cond = while_stmt.condition().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 if cond.ty() != HirType::Error && cond.ty() != HirType::Bool {
                     self.errors.push(SemanticError::TypeMismatch {
                         expected: HirType::Bool,
@@ -785,17 +785,17 @@ impl LoweringContext {
                 }
                 
                 let body = while_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
-                HirStmt::While(cond, body, invariants, decreases, assigns)
+                HirStmt::new(HirStmtKind::While(cond, body, invariants, decreases, assigns), Span::default())
             }
             ast::Stmt::BreakStmt(_) => {
-                HirStmt::Break
+                HirStmt::new(HirStmtKind::Break, Span::default())
             }
             ast::Stmt::ContinueStmt(_) => {
-                HirStmt::Continue
+                HirStmt::new(HirStmtKind::Continue, Span::default())
             }
             ast::Stmt::ForStmt(for_stmt) => {
                 let item_name = for_stmt.item().map(|t| t.text().to_string()).unwrap_or_default();
-                let iterable = for_stmt.iterable().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let iterable = for_stmt.iterable().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 
                 let inner_ty = match iterable.ty() {
                     HirType::Array(t, _) => *t,
@@ -816,7 +816,7 @@ impl LoweringContext {
                 // If we want to support spec blocks in For loops, we would parse them here.
                 // For now we leave it empty.
                 
-                HirStmt::For(item_name, iterable, body, assigns)
+                HirStmt::new(HirStmtKind::For(item_name, iterable, body, assigns), Span::default())
             }
         }
     }
@@ -827,25 +827,25 @@ impl LoweringContext {
                 if let Some(tok) = lit.token() {
                     if tok.kind() == crate::parser::syntax::SyntaxKind::IntLit {
                         let val: i64 = tok.text().parse().unwrap_or(0);
-                        HirExpr::IntLiteral(val, HirType::I32)
+                        HirExpr::new(HirExprKind::IntLiteral(val, HirType::I32), Span::default())
                     } else if tok.kind() == crate::parser::syntax::SyntaxKind::BoolTrue {
-                        HirExpr::BoolLiteral(true, HirType::Bool)
+                        HirExpr::new(HirExprKind::BoolLiteral(true, HirType::Bool), Span::default())
                     } else if tok.kind() == crate::parser::syntax::SyntaxKind::BoolFalse {
-                        HirExpr::BoolLiteral(false, HirType::Bool)
+                        HirExpr::new(HirExprKind::BoolLiteral(false, HirType::Bool), Span::default())
                     } else {
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else {
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
             ast::Expr::NameRef(name_ref) => {
                 let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                 if let Some((ty, _is_const)) = self.lookup_var(&name) {
-                    HirExpr::VarRef(name, ty)
+                    HirExpr::new(HirExprKind::VarRef(name, ty), Span::default())
                 } else {
                     self.errors.push(SemanticError::UndefinedVariable { name: name.clone() });
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
             ast::Expr::CallExpr(call_expr) => {
@@ -882,7 +882,7 @@ impl LoweringContext {
                         
                         if args.len() != payload_tys.len() {
                             self.errors.push(SemanticError::UndefinedVariable { name: format!("arity mismatch for variant case {}.{}", variant_name, case_name) });
-                            HirExpr::Error
+                            HirExpr::new(HirExprKind::Error, Span::default())
                         } else {
                             for (arg, expected_ty) in args.iter().zip(payload_tys.iter()) {
                                 if arg.ty() != HirType::Error && arg.ty() != *expected_ty {
@@ -892,11 +892,11 @@ impl LoweringContext {
                                     });
                                 }
                             }
-                            HirExpr::VariantConstructor(variant_name.clone(), case_name, args, HirType::Variant(variant_name))
+                            HirExpr::new(HirExprKind::VariantConstructor(variant_name.clone(), case_name, args, HirType::Variant(variant_name)), Span::default())
                         }
                     } else {
                         self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", case_name, variant_name) });
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else if let Some(callee_ast) = call_expr.callee() {
                     let mut is_direct = false;
@@ -936,20 +936,20 @@ impl LoweringContext {
                     
                     if is_direct {
                         if direct_name == "Ok" {
-                            let arg = args.into_iter().next().unwrap_or(HirExpr::Error);
-                            HirExpr::ResultOk(Box::new(arg), self.current_func_ret_type.clone())
+                            let arg = args.into_iter().next().unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                            HirExpr::new(HirExprKind::ResultOk(Box::new(arg), self.current_func_ret_type.clone()), Span::default())
                         } else if direct_name == "Err" {
-                            let arg = args.into_iter().next().unwrap_or(HirExpr::Error);
-                            HirExpr::ResultErr(Box::new(arg), self.current_func_ret_type.clone())
+                            let arg = args.into_iter().next().unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                            HirExpr::new(HirExprKind::ResultErr(Box::new(arg), self.current_func_ret_type.clone()), Span::default())
                         } else if direct_name == "valid" || direct_name == "valid_read" || direct_name == "separated" {
-                            HirExpr::Call(direct_name, args, HirType::Bool)
+                            HirExpr::new(HirExprKind::Call(direct_name, args, HirType::Bool), Span::default())
                         } else {
                             let func_info = self.functions.get(&direct_name).cloned().unwrap();
                             if args.len() != func_info.0.len() {
                                 self.errors.push(SemanticError::Custom(format!("arity mismatch for {}", direct_name)));
-                                HirExpr::Error
+                                HirExpr::new(HirExprKind::Error, Span::default())
                             } else {
-                                HirExpr::Call(direct_name, args, func_info.1.clone())
+                                HirExpr::new(HirExprKind::Call(direct_name, args, func_info.1.clone()), Span::default())
                             }
                         }
                     } else {
@@ -957,24 +957,24 @@ impl LoweringContext {
                         if let HirType::Func(param_tys, ret_ty) = callee.ty() {
                             if args.len() != param_tys.len() {
                                 self.errors.push(SemanticError::Custom("arity mismatch for indirect call".to_string()));
-                                HirExpr::Error
+                                HirExpr::new(HirExprKind::Error, Span::default())
                             } else {
-                                HirExpr::CallIndirect(Box::new(callee), args, *ret_ty)
+                                HirExpr::new(HirExprKind::CallIndirect(Box::new(callee), args, *ret_ty), Span::default())
                             }
                         } else if callee.ty() != HirType::Error {
                             self.errors.push(SemanticError::Custom("expected function type".to_string()));
-                            HirExpr::Error
+                            HirExpr::new(HirExprKind::Error, Span::default())
                         } else {
-                            HirExpr::Error
+                            HirExpr::new(HirExprKind::Error, Span::default())
                         }
                     }
                 } else {
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
             ast::Expr::BinExpr(bin_expr) => {
-                let lhs = bin_expr.lhs().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
-                let rhs = bin_expr.rhs().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let lhs = bin_expr.lhs().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                let rhs = bin_expr.rhs().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 let op_tok = bin_expr.op();
                 
                 if let Some(tok) = op_tok {
@@ -996,13 +996,13 @@ impl LoweringContext {
                         Implies => (BinaryOp::Implies, HirType::Bool, HirType::Bool),
                         Iff => (BinaryOp::Iff, HirType::Bool, HirType::Bool),
                         Eq => (BinaryOp::Assign, lhs.ty(), lhs.ty()), // Assignment returns the value
-                        _ => return HirExpr::Error,
+                        _ => return HirExpr::new(HirExprKind::Error, Span::default()),
                     };
 
                     if op == BinaryOp::Assign {
                         if !lhs.is_lvalue() {
                             self.errors.push(SemanticError::Custom("invalid assignment target: not an lvalue".to_string()));
-                        } else if let HirExpr::VarRef(name, _) = &lhs
+                        } else if let HirExprKind::VarRef(name, _) = &lhs.kind
                             && let Some((_, is_const)) = self.lookup_var(name)
                                 && is_const {
                                     self.errors.push(SemanticError::ImmutableAssignment { name: name.clone() });
@@ -1017,7 +1017,7 @@ impl LoweringContext {
                                     lhs: lhs.ty(),
                                     rhs: rhs.ty(),
                                 });
-                                return HirExpr::Error;
+                                return HirExpr::new(HirExprKind::Error, Span::default());
                             }
                         } else if op == BinaryOp::Assign {
                             if !self.types_compatible(&lhs.ty(), &rhs.ty()) {
@@ -1026,7 +1026,7 @@ impl LoweringContext {
                                     lhs: lhs.ty(),
                                     rhs: rhs.ty(),
                                 });
-                                return HirExpr::Error;
+                                return HirExpr::new(HirExprKind::Error, Span::default());
                             }
                         } else if lhs.ty() != rhs.ty() {
                             self.errors.push(SemanticError::BinOpMismatch {
@@ -1034,22 +1034,22 @@ impl LoweringContext {
                                 lhs: lhs.ty(),
                                 rhs: rhs.ty(),
                             });
-                            return HirExpr::Error;
+                            return HirExpr::new(HirExprKind::Error, Span::default());
                         }
                     }
 
-                    HirExpr::BinaryOp(op, Box::new(lhs), Box::new(rhs), ret_ty)
+                    HirExpr::new(HirExprKind::BinaryOp(op, Box::new(lhs), Box::new(rhs), ret_ty), Span::default())
                 } else {
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
             ast::Expr::PrefixExpr(prefix_expr) => {
-                let inner = prefix_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let inner = prefix_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 if let Some(op_tok) = prefix_expr.op() {
                     let op = match op_tok.kind() {
                         crate::parser::syntax::SyntaxKind::Minus => UnaryOp::Neg,
                         crate::parser::syntax::SyntaxKind::Bang => UnaryOp::Not,
-                        _ => return HirExpr::Error,
+                        _ => return HirExpr::new(HirExprKind::Error, Span::default()),
                     };
                     
                     let expected_ty = match op {
@@ -1063,22 +1063,22 @@ impl LoweringContext {
                             lhs: inner.ty(),
                             rhs: inner.ty(),
                         });
-                        return HirExpr::Error;
+                        return HirExpr::new(HirExprKind::Error, Span::default());
                     }
-                    HirExpr::UnaryOp(op, Box::new(inner), expected_ty)
+                    HirExpr::new(HirExprKind::UnaryOp(op, Box::new(inner), expected_ty), Span::default())
                 } else {
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
             ast::Expr::IfExpr(if_expr) => {
-                self.lower_if_expr(if_expr)
+                self.lower_if_expr(&if_expr)
             }
             ast::Expr::StructExpr(struct_expr) => {
                 let name = struct_expr.name().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
                 let mut field_exprs = Vec::new();
                 for f in struct_expr.fields() {
                     let f_name = f.name().map(|n| n.text().to_string()).unwrap_or_default();
-                    let f_expr = f.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                    let f_expr = f.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                     field_exprs.push((f_name, f_expr));
                 }
                 
@@ -1130,10 +1130,10 @@ impl LoweringContext {
                             self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, mono_name) });
                         }
                     }
-                    HirExpr::StructExpr(mono_name.clone(), field_exprs, HirType::Struct(mono_name))
+                    HirExpr::new(HirExprKind::StructExpr(mono_name.clone(), field_exprs, HirType::Struct(mono_name)), Span::default())
                 } else {
                     self.errors.push(SemanticError::UnknownType { name: mono_name.clone() });
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
             ast::Expr::FieldExpr(field_expr) => {
@@ -1159,48 +1159,48 @@ impl LoweringContext {
                     let enum_name = enum_name_opt.unwrap();
                     let variants = self.enums.get(&enum_name).unwrap();
                     if let Some(idx) = variants.iter().position(|v| v == &field_name) {
-                        HirExpr::EnumVariant(enum_name.clone(), field_name, idx as u64, HirType::Enum(enum_name))
+                        HirExpr::new(HirExprKind::EnumVariant(enum_name.clone(), field_name, idx as u64, HirType::Enum(enum_name)), Span::default())
                     } else {
                         self.errors.push(SemanticError::UndefinedVariable { name: format!("variant {} in enum {}", field_name, enum_name) });
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else if is_variant_case {
                     let variant_name = variant_name_opt.unwrap();
                     let cases = self.variants.get(&variant_name).unwrap();
                     if let Some((case_name, payload_tys)) = cases.iter().find(|(n, _)| n == &field_name) {
                         if payload_tys.is_empty() {
-                            HirExpr::VariantConstructor(variant_name.clone(), case_name.clone(), Vec::new(), HirType::Variant(variant_name))
+                            HirExpr::new(HirExprKind::VariantConstructor(variant_name.clone(), case_name.clone(), Vec::new(), HirType::Variant(variant_name)), Span::default())
                         } else {
                             self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {} requires parameters", field_name, variant_name) });
-                            HirExpr::Error
+                            HirExpr::new(HirExprKind::Error, Span::default())
                         }
                     } else {
                         self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", field_name, variant_name) });
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else {
-                    let base = field_expr.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                    let base = field_expr.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                     if let HirType::Struct(s_name) = base.ty() {
                         if let Some(def_fields) = self.structs.get(&s_name) {
                             if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == &field_name) {
-                                HirExpr::FieldAccess(Box::new(base), field_name, def_ty.clone())
+                                HirExpr::new(HirExprKind::FieldAccess(Box::new(base), field_name, def_ty.clone()), Span::default())
                             } else {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", field_name, s_name) });
-                                HirExpr::Error
+                                HirExpr::new(HirExprKind::Error, Span::default())
                             }
                         } else {
-                            HirExpr::Error
+                            HirExpr::new(HirExprKind::Error, Span::default())
                         }
                     } else if base.ty() != HirType::Error {
                         self.errors.push(SemanticError::UndefinedVariable { name: format!("field access on non-struct type {:?}", base.ty()) });
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     } else {
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 }
             }
             ast::Expr::MatchExpr(match_expr) => {
-                let expr = match_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let expr = match_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 let mut arms = Vec::new();
                 let mut ret_ty = HirType::Error;
                 
@@ -1216,7 +1216,7 @@ impl LoweringContext {
                     let arm_expr = if let Some(e) = arm.val() {
                         self.lower_expr(&e)
                     } else {
-                        HirExpr::Error
+                        HirExpr::new(HirExprKind::Error, Span::default())
                     };
                     self.exit_scope();
                     
@@ -1232,7 +1232,7 @@ impl LoweringContext {
                     }
                     arms.push((pat, arm_expr));
                 }
-                HirExpr::Match(Box::new(expr), arms, ret_ty)
+                HirExpr::new(HirExprKind::Match(Box::new(expr), arms, ret_ty), Span::default())
             }
             ast::Expr::ArrayExpr(arr) => {
                 let elements: Vec<HirExpr> = arr.elements().map(|e| self.lower_expr(&e)).collect();
@@ -1248,11 +1248,11 @@ impl LoweringContext {
                         }
                     }
                 }
-                HirExpr::ArrayExpr(elements.clone(), HirType::Array(Box::new(ty), elements.len() as u64))
+                HirExpr::new(HirExprKind::ArrayExpr(elements.clone(), HirType::Array(Box::new(ty), elements.len() as u64)), Span::default())
             }
             ast::Expr::IndexExpr(idx) => {
-                let base = idx.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
-                let index = idx.index().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let base = idx.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                let index = idx.index().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 
                 if index.ty() != HirType::Error && index.ty() != HirType::I32 {
                     // Assuming indices are i32 for now
@@ -1272,12 +1272,12 @@ impl LoweringContext {
                     }
                 };
                 
-                HirExpr::IndexExpr(Box::new(base), Box::new(index), ret_ty)
+                HirExpr::new(HirExprKind::IndexExpr(Box::new(base), Box::new(index), ret_ty), Span::default())
             }
             ast::Expr::SliceExpr(slc) => {
-                let base = slc.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
-                let start = slc.start().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
-                let end = slc.end().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let base = slc.base().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                let start = slc.start().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
+                let end = slc.end().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 
                 if start.ty() != HirType::Error && start.ty() != HirType::I32 {
                     self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: start.ty() });
@@ -1296,10 +1296,10 @@ impl LoweringContext {
                     }
                 };
                 
-                HirExpr::SliceExpr(Box::new(base), Box::new(start), Box::new(end), ret_ty)
+                HirExpr::new(HirExprKind::SliceExpr(Box::new(base), Box::new(start), Box::new(end), ret_ty), Span::default())
             }
             ast::Expr::TryExpr(try_expr) => {
-                let inner = try_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let inner = try_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 let ty = inner.ty();
                 let ok_ty = if let HirType::Result(ok, _) = &ty {
                     *(ok.clone())
@@ -1309,20 +1309,20 @@ impl LoweringContext {
                     }
                     HirType::Error
                 };
-                HirExpr::Try(Box::new(inner), ok_ty)
+                HirExpr::new(HirExprKind::Try(Box::new(inner), ok_ty), Span::default())
             }
             ast::Expr::RefExpr(ref_expr) => {
-                let inner = ref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let inner = ref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 if !inner.is_lvalue() && inner.ty() != HirType::Error {
                     self.errors.push(SemanticError::Custom("Cannot take address of non-lvalue expression".to_string()));
-                    return HirExpr::Error;
+                    return HirExpr::new(HirExprKind::Error, Span::default());
                 }
                 let is_mut = ref_expr.is_mut();
                 let ty = HirType::Ref(Box::new(inner.ty()), is_mut);
-                HirExpr::Ref(Box::new(inner), is_mut, ty)
+                HirExpr::new(HirExprKind::Ref(Box::new(inner), is_mut, ty), Span::default())
             }
             ast::Expr::DerefExpr(deref_expr) => {
-                let inner = deref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let inner = deref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 let ty = match inner.ty() {
                     HirType::Ref(t, _) => *t,
                     HirType::Ptr(t, _) => {
@@ -1337,19 +1337,19 @@ impl LoweringContext {
                         HirType::Error
                     }
                 };
-                HirExpr::Deref(Box::new(inner), ty)
+                HirExpr::new(HirExprKind::Deref(Box::new(inner), ty), Span::default())
             }
             ast::Expr::UnsafeBlock(unsafe_block) => {
                 let prev = self.in_unsafe_block;
                 self.in_unsafe_block = true;
                 let block = unsafe_block.block().map(|b| self.lower_block(&b)).unwrap_or_else(|| HirBlock { statements: vec![] });
-                let ty = if let Some(HirStmt::Expr(e)) = block.statements.last() {
+                let ty = if let Some(HirStmtKind::Expr(e)) = block.statements.last().map(|s| &s.kind) {
                     e.ty()
                 } else {
                     HirType::Void
                 };
                 self.in_unsafe_block = prev;
-                HirExpr::Block(block, ty)
+                HirExpr::new(HirExprKind::Block(block, ty), Span::default())
             }
             ast::Expr::ClosureExpr(closure) => {
                 let mut params = Vec::new();
@@ -1366,7 +1366,7 @@ impl LoweringContext {
                     self.declare_var(name.clone(), ty.clone(), false);
                 }
                 
-                let body = closure.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
+                let body = closure.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 let ret_ty = body.ty();
                 
                 self.exit_scope();
@@ -1380,11 +1380,11 @@ impl LoweringContext {
                 let captured_vars: Vec<String> = captures.into_iter().collect();
                 
                 let closure_ty = HirType::Func(param_tys, Box::new(ret_ty));
-                HirExpr::Closure(params, Box::new(body), captured_vars, closure_ty)
+                HirExpr::new(HirExprKind::Closure(params, Box::new(body), captured_vars, closure_ty), Span::default())
             }
             ast::Expr::GenericInstExpr(_expr) => {
                 // TODO: Implement generic instantiation monomorphization
-                HirExpr::Error
+                HirExpr::new(HirExprKind::Error, Span::default())
             }
             ast::Expr::QuantifierExpr(quant) => {
                 let kind_token = quant.quantifier_token().map(|t| t.kind()).unwrap_or(crate::parser::syntax::SyntaxKind::ERROR_NODE);
@@ -1407,15 +1407,15 @@ impl LoweringContext {
                 let body = if let Some(b) = quant.body() {
                     let lowered_block = self.lower_block(&b);
                     let ret_ty = match lowered_block.statements.last() {
-                        Some(crate::hir::HirStmt::Expr(e)) => e.ty(),
-                        Some(crate::hir::HirStmt::Return(Some(e))) => e.ty(),
+                        Some(stmt) => match &stmt.kind { crate::hir::HirStmtKind::Expr(e) => e.ty(), crate::hir::HirStmtKind::Return(Some(e)) => e.ty(), _ => HirType::Void },
+                        
                         _ => HirType::Void,
                     };
-                    HirExpr::Block(lowered_block, ret_ty)
+                    HirExpr::new(HirExprKind::Block(lowered_block, ret_ty), Span::default())
                 } else if let Some(e) = quant.expr() {
                     self.lower_expr(&e)
                 } else {
-                    HirExpr::Error
+                    HirExpr::new(HirExprKind::Error, Span::default())
                 };
                 self.exit_scope();
                 
@@ -1431,7 +1431,7 @@ impl LoweringContext {
                     }
                 };
                 
-                HirExpr::Quantifier(kind, params, Box::new(body), ret_ty)
+                HirExpr::new(HirExprKind::Quantifier(kind, params, Box::new(body), ret_ty), Span::default())
             }
         }
     }
@@ -1447,7 +1447,7 @@ impl LoweringContext {
             }
             c_expr
         } else {
-            HirExpr::Error
+            HirExpr::new(HirExprKind::Error, Span::default())
         };
 
         // For type checking, if-else should return the same type.
@@ -1464,7 +1464,7 @@ impl LoweringContext {
             } else if b.kind() == crate::parser::syntax::SyntaxKind::IF_EXPR {
                 if let Some(elif) = ast::IfExpr::cast(b) {
                     let elif_expr = self.lower_if_expr(&elif);
-                    Some(HirBlock { statements: vec![HirStmt::Expr(elif_expr)] })
+                    Some(HirBlock { statements: vec![HirStmt::new(HirStmtKind::Expr(elif_expr), Span::default())] })
                 } else {
                     None
                 }
@@ -1475,58 +1475,58 @@ impl LoweringContext {
             None
         };
 
-        HirExpr::If(Box::new(cond), then_block, else_block, HirType::Void)
+        HirExpr::new(HirExprKind::If(Box::new(cond), then_block, else_block, HirType::Void), Span::default())
     }
 }
 
 fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, captures: &mut std::collections::HashSet<String>) {
-    match expr {
-        HirExpr::VarRef(name, _) => {
+    match &expr.kind {
+        HirExprKind::VarRef(name, _) => {
             if !bound.contains(name) {
                 captures.insert(name.clone());
             }
         }
-        HirExpr::BinaryOp(_, lhs, rhs, _) => {
+        HirExprKind::BinaryOp(_, lhs, rhs, _) => {
             get_captures(lhs, bound, captures);
             get_captures(rhs, bound, captures);
         }
-        HirExpr::UnaryOp(_, inner, _) | HirExpr::Ref(inner, _, _) | HirExpr::Deref(inner, _) | HirExpr::Try(inner, _)
-        | HirExpr::ResultOk(inner, _) | HirExpr::ResultErr(inner, _) | HirExpr::FieldAccess(inner, _, _) => {
+        HirExprKind::UnaryOp(_, inner, _) | HirExprKind::Ref(inner, _, _) | HirExprKind::Deref(inner, _) | HirExprKind::Try(inner, _)
+        | HirExprKind::ResultOk(inner, _) | HirExprKind::ResultErr(inner, _) | HirExprKind::FieldAccess(inner, _, _) => {
             get_captures(inner, bound, captures);
         }
-        HirExpr::Call(_, args, _) | HirExpr::VariantConstructor(_, _, args, _) | HirExpr::ArrayExpr(args, _) => {
+        HirExprKind::Call(_, args, _) | HirExprKind::VariantConstructor(_, _, args, _) | HirExprKind::ArrayExpr(args, _) => {
             for arg in args {
                 get_captures(arg, bound, captures);
             }
         }
-        HirExpr::CallIndirect(callee, args, _) => {
+        HirExprKind::CallIndirect(callee, args, _) => {
             get_captures(callee, bound, captures);
             for arg in args {
                 get_captures(arg, bound, captures);
             }
         }
-        HirExpr::If(cond, then_b, else_b, _) => {
+        HirExprKind::If(cond, then_b, else_b, _) => {
             get_captures(cond, bound, captures);
             get_captures_block(then_b, bound, captures);
             if let Some(b) = else_b {
                 get_captures_block(b, bound, captures);
             }
         }
-        HirExpr::StructExpr(_, fields, _) => {
+        HirExprKind::StructExpr(_, fields, _) => {
             for (_, e) in fields {
                 get_captures(e, bound, captures);
             }
         }
-        HirExpr::IndexExpr(base, idx, _) => {
+        HirExprKind::IndexExpr(base, idx, _) => {
             get_captures(base, bound, captures);
             get_captures(idx, bound, captures);
         }
-        HirExpr::SliceExpr(base, start, end, _) => {
+        HirExprKind::SliceExpr(base, start, end, _) => {
             get_captures(base, bound, captures);
             get_captures(start, bound, captures);
             get_captures(end, bound, captures);
         }
-        HirExpr::Match(cond, arms, _) => {
+        HirExprKind::Match(cond, arms, _) => {
             get_captures(cond, bound, captures);
             for (pat, e) in arms {
                 let mut new_bound = bound.clone();
@@ -1545,40 +1545,40 @@ fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, c
                 get_captures(e, &mut new_bound, captures);
             }
         }
-        HirExpr::Block(block, _) => {
+        HirExprKind::Block(block, _) => {
             get_captures_block(block, bound, captures);
         }
-        HirExpr::Closure(params, body, _, _) => {
+        HirExprKind::Closure(params, body, _, _) => {
             let mut new_bound = bound.clone();
             for p in params {
                 new_bound.insert(p.clone());
             }
             get_captures(body, &mut new_bound, captures);
         }
-        HirExpr::Quantifier(_, params, body, _) => {
+        HirExprKind::Quantifier(_, params, body, _) => {
             let mut new_bound = bound.clone();
             for (p, _) in params {
                 new_bound.insert(p.clone());
             }
             get_captures(body, &mut new_bound, captures);
         }
-        HirExpr::IntLiteral(_, _) | HirExpr::BoolLiteral(_, _) | HirExpr::EnumVariant(_, _, _, _) | HirExpr::Error => {}
+        HirExprKind::IntLiteral(_, _) | HirExprKind::BoolLiteral(_, _) | HirExprKind::EnumVariant(_, _, _, _) | HirExprKind::Error => {}
     }
 }
 
 fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<String>, captures: &mut std::collections::HashSet<String>) {
     let mut new_bound = bound.clone();
     for stmt in &block.statements {
-        match stmt {
-            HirStmt::Let(name, _, _, init) => {
+        match &stmt.kind {
+            HirStmtKind::Let(name, _, _, init) => {
                 get_captures(init, &mut new_bound, captures);
                 new_bound.insert(name.clone());
             }
-            HirStmt::Expr(e) | HirStmt::Assert(e) | HirStmt::Assume(e) => get_captures(e, &mut new_bound, captures),
-            HirStmt::Return(Some(e)) => get_captures(e, &mut new_bound, captures),
-            HirStmt::Return(None) | HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
-            HirStmt::GhostBlock(ghost_body) => get_captures_block(ghost_body, &mut new_bound, captures),
-            HirStmt::While(cond, body, invs, decreases, _) => {
+            HirStmtKind::Expr(e) | HirStmtKind::Assert(e) | HirStmtKind::Assume(e) => get_captures(e, &mut new_bound, captures),
+            HirStmtKind::Return(Some(e)) => get_captures(e, &mut new_bound, captures),
+            HirStmtKind::Return(None) | HirStmtKind::Break | HirStmtKind::Continue | HirStmtKind::Error => {}
+            HirStmtKind::GhostBlock(ghost_body) => get_captures_block(ghost_body, &mut new_bound, captures),
+            HirStmtKind::While(cond, body, invs, decreases, _) => {
                 get_captures(cond, &mut new_bound, captures);
                 for inv in invs {
                     get_captures(inv, &mut new_bound, captures);
@@ -1588,7 +1588,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
                 }
                 get_captures_block(body, &mut new_bound, captures);
             }
-            HirStmt::For(name, iter, body, _) => {
+            HirStmtKind::For(name, iter, body, _) => {
                 get_captures(iter, &mut new_bound, captures);
                 let mut b2 = new_bound.clone();
                 b2.insert(name.clone());
@@ -1602,7 +1602,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
 mod tests {
     use super::*;
     use crate::parser::{Parser, ast::{AstNode, SourceFile}};
-    use crate::hir::{HirType, HirStmt, HirExpr, BinaryOp};
+    use crate::hir::{Span, HirExprKind, HirStmtKind, HirType, HirStmt, HirExpr, BinaryOp};
 
     /// Parses `src` and runs the HIR lowering pass.
     /// Returns `(HirProgram, Vec<SemanticError>)`.
@@ -1638,19 +1638,19 @@ mod tests {
         assert_eq!(f.params[1], ("b".to_string(), HirType::I32));
     }
 
-    /// `const x: i32 = 1;` lowers to `HirStmt::Let("x", is_const=true, I32, IntLiteral(1))`.
+    /// `const x: i32 = 1;` lowers to `HirStmt::new(HirStmtKind::Let("x", is_const=true, I32, IntLiteral(1)), Span::default())`.
     #[test]
     fn test_lower_const_let() {
         let (prog, errors) = parse_and_lower("func f(): i32 { const x: i32 = 1; return x; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
         let stmts = &prog.functions[0].body.statements;
-        if let HirStmt::Let(name, is_const, ty, init) = &stmts[0] {
+        if let HirStmtKind::Let(name, is_const, ty, init) = &stmts[0].kind {
             assert_eq!(name, "x");
             assert!(*is_const, "expected const binding");
             assert_eq!(*ty, HirType::I32);
-            assert!(matches!(init, HirExpr::IntLiteral(1, _)));
+            assert!(matches!(&init.kind, HirExprKind::IntLiteral(1, _)));
         } else {
-            panic!("Expected HirStmt::Let, got {:?}", stmts[0]);
+            panic!("Expected HirStmtKind::Let, got {:?}", stmts[0]);
         }
     }
 
@@ -1659,11 +1659,11 @@ mod tests {
     fn test_lower_var_let() {
         let (prog, errors) = parse_and_lower("func f(): i32 { var y: i32 = 2; return y; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmt::Let(name, is_const, _, _) = &prog.functions[0].body.statements[0] {
+        if let HirStmtKind::Let(name, is_const, _, _) = &prog.functions[0].body.statements[0].kind {
             assert_eq!(name, "y");
             assert!(!is_const, "expected mutable binding");
         } else {
-            panic!("Expected HirStmt::Let");
+            panic!("Expected HirStmtKind::Let");
         }
     }
 
@@ -1672,10 +1672,10 @@ mod tests {
     fn test_lower_type_inferred_from_initializer() {
         let (prog, errors) = parse_and_lower("func f(): i32 { const x = 42; return x; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmt::Let(_, _, ty, _) = &prog.functions[0].body.statements[0] {
+        if let HirStmtKind::Let(_, _, ty, _) = &prog.functions[0].body.statements[0].kind {
             assert_eq!(*ty, HirType::I32, "type should be inferred as I32");
         } else {
-            panic!("Expected HirStmt::Let");
+            panic!("Expected HirStmtKind::Let");
         }
     }
 
@@ -1785,21 +1785,21 @@ mod tests {
         let (prog, errors) = parse_and_lower(src);
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
         let stmts = &prog.functions[0].body.statements;
-        if let HirStmt::Return(Some(expr)) = stmts.last().unwrap() {
+        if let HirStmtKind::Return(Some(expr)) = &stmts.last().unwrap().kind {
             assert_eq!(expr.ty(), HirType::I32, "field access should have type I32");
         } else {
             panic!("Expected Return statement");
         }
     }
 
-    /// Binary arithmetic lowers to `HirExpr::BinaryOp` with the correct operator and result type.
+    /// Binary arithmetic lowers to `HirExprKind::BinaryOp` with the correct operator and result type.
     #[test]
     fn test_lower_binary_add() {
         let src = "func f(): i32 { return 1 + 2; }";
         let (prog, errors) = parse_and_lower(src);
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmt::Return(Some(expr)) = &prog.functions[0].body.statements[0] {
-            if let HirExpr::BinaryOp(op, _, _, ty) = expr {
+        if let HirStmtKind::Return(Some(expr)) = &prog.functions[0].body.statements[0].kind {
+            if let HirExprKind::BinaryOp(op, _, _, ty) = &expr.kind {
                 assert_eq!(*op, BinaryOp::Add);
                 assert_eq!(*ty, HirType::I32);
             } else {

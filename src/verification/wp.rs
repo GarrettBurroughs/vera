@@ -1,4 +1,4 @@
-use crate::hir::{HirFunc, HirStmt, HirExpr, HirType, BinaryOp};
+use crate::hir::{HirExprKind, HirStmtKind, HirFunc, HirStmt, HirExpr, HirType, BinaryOp};
 use super::smt::{SmtExpr, check_sat};
 use super::VerificationError;
 
@@ -27,7 +27,7 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
     // 3.5. Add parameter refinement constraints as preconditions
     for (p_name, p_ty) in &func.params {
         if let HirType::Refinement(_, cond) = p_ty {
-            let cond_smt = hir_to_smt(cond).substitute("self", &SmtExpr::Var(p_name.clone()));
+            let cond_smt = hir_to_smt(&cond).substitute("self", &SmtExpr::Var(p_name.clone(), "Int".into()));
             precondition = SmtExpr::And(Box::new(precondition), Box::new(cond_smt));
         }
     }
@@ -55,34 +55,34 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
 }
 
 fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[HirExpr]) -> SmtExpr {
-    match stmt {
-        HirStmt::Assert(expr) => {
-            wp_eval_expr(expr, "__dummy_assert", SmtExpr::And(Box::new(SmtExpr::Var("__dummy_assert".into())), Box::new(post)), ensures_wp, assigns)
+    match &stmt.kind {
+        HirStmtKind::Assert(expr) => {
+            wp_eval_expr(expr, "__dummy_assert", SmtExpr::And(Box::new(SmtExpr::Var("__dummy_assert".into(), "Int".into())), Box::new(post)), ensures_wp, assigns)
         }
-        HirStmt::Assume(expr) => {
-            wp_eval_expr(expr, "__dummy_assume", SmtExpr::Implies(Box::new(SmtExpr::Var("__dummy_assume".into())), Box::new(post)), ensures_wp, assigns)
+        HirStmtKind::Assume(expr) => {
+            wp_eval_expr(expr, "__dummy_assume", SmtExpr::Implies(Box::new(SmtExpr::Var("__dummy_assume".into(), "Int".into())), Box::new(post)), ensures_wp, assigns)
         }
-        HirStmt::Let(name, _, ty, init) => {
+        HirStmtKind::Let(name, _, ty, init) => {
             let mut post_sub = wp_eval_expr(init, name, post, ensures_wp, assigns);
             if let HirType::Refinement(_, cond) = ty {
-                let cond_smt = hir_to_smt(cond).substitute("self", &SmtExpr::Var(name.clone()));
+                let cond_smt = hir_to_smt(&cond).substitute("self", &SmtExpr::Var(name.clone(), "Int".into()));
                 post_sub = SmtExpr::And(Box::new(cond_smt), Box::new(post_sub));
             }
             post_sub
         }
-        HirStmt::Expr(expr) => {
-            if let HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = expr {
-                if let HirExpr::VarRef(name, ty) = lhs.as_ref() {
+        HirStmtKind::Expr(expr) => {
+            if let HirExprKind::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = &expr.kind {
+                if let HirExprKind::VarRef(name, ty) = &lhs.kind {
                     let mut post_sub = wp_eval_expr(rhs, name, post, ensures_wp, assigns);
                     if let HirType::Refinement(_, cond) = ty {
-                        let cond_smt = hir_to_smt(cond).substitute("self", &SmtExpr::Var(name.clone()));
+                        let cond_smt = hir_to_smt(&cond).substitute("self", &SmtExpr::Var(name.clone(), "Int".into()));
                         post_sub = SmtExpr::And(Box::new(cond_smt), Box::new(post_sub));
                     }
                     return post_sub;
-                } else if let HirExpr::Deref(ptr, _) = lhs.as_ref() {
+                } else if let HirExprKind::Deref(ptr, _) = &lhs.kind {
                     let mut frame_cond = SmtExpr::BoolConst(false);
                     for a in assigns {
-                        if let HirExpr::Deref(a_ptr, _) = a {
+                        if let HirExprKind::Deref(a_ptr, _) = &a.kind {
                             frame_cond = SmtExpr::Or(Box::new(frame_cond), Box::new(SmtExpr::Eq(Box::new(hir_to_smt(ptr)), Box::new(hir_to_smt(a_ptr)))));
                         }
                     }
@@ -95,7 +95,7 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[Hi
             }
             wp_eval_expr(expr, "__dummy_expr", post, ensures_wp, assigns)
         }
-        HirStmt::While(cond, body, invariants, decreases, loop_assigns) => {
+        HirStmtKind::While(cond, body, invariants, decreases, loop_assigns) => {
             let mut i_expr = SmtExpr::BoolConst(true);
             for inv in invariants {
                 i_expr = SmtExpr::And(Box::new(i_expr), Box::new(hir_to_smt(inv)));
@@ -106,24 +106,25 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[Hi
                 collect_modified_vars_stmt(s, &mut mod_vars);
             }
             
-            let b_expr = hir_to_smt(cond);
+            let b_expr = hir_to_smt(&cond);
             
             // compute_block_wp backwards
             let mut body_wp = i_expr.clone();
+            
+            if let Some(dec) = decreases {
+                let d_expr = hir_to_smt(dec);
+                let d0_var = SmtExpr::Var("___d0".into(), "Int".into());
+                let dec_cond = SmtExpr::FuncCall("<".into(), vec![d_expr.clone(), d0_var.clone()]);
+                body_wp = SmtExpr::And(Box::new(body_wp), Box::new(dec_cond));
+            }
+            
             for s in body.statements.iter().rev() {
                 body_wp = compute_wp(s, body_wp, ensures_wp, loop_assigns);
             }
             
             if let Some(dec) = decreases {
                 let d_expr = hir_to_smt(dec);
-                let d0_var = SmtExpr::Var("___d0".into());
-                let dec_cond = SmtExpr::FuncCall("<".into(), vec![d_expr.clone(), d0_var.clone()]);
-                body_wp = SmtExpr::And(Box::new(body_wp), Box::new(dec_cond));
-            }
-            
-            if let Some(dec) = decreases {
-                let d_expr = hir_to_smt(dec);
-                let d0_eq = SmtExpr::FuncCall("=".into(), vec![SmtExpr::Var("___d0".into()), d_expr.clone()]);
+                let d0_eq = SmtExpr::FuncCall("=".into(), vec![SmtExpr::Var("___d0".into(), "Int".into()), d_expr.clone()]);
                 let d_pos = SmtExpr::FuncCall(">=".into(), vec![d_expr.clone(), SmtExpr::IntConst(0)]);
                 
                 body_wp = SmtExpr::And(
@@ -147,18 +148,18 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[Hi
             
             SmtExpr::And(Box::new(i_expr), Box::new(quantified_body))
         }
-        HirStmt::For(_, _, _, _) => post,
-        HirStmt::Break => post,
-        HirStmt::Continue => post,
-        HirStmt::Return(opt_expr) => {
+        HirStmtKind::For(_, _, _, _) => post,
+        HirStmtKind::Break => post,
+        HirStmtKind::Continue => post,
+        HirStmtKind::Return(opt_expr) => {
             if let Some(expr) = opt_expr {
                 wp_eval_expr(expr, "result", ensures_wp.clone(), ensures_wp, assigns)
             } else {
                 ensures_wp.clone()
             }
         }
-        HirStmt::Error => post,
-        HirStmt::GhostBlock(block) => {
+        HirStmtKind::Error => post,
+        HirStmtKind::GhostBlock(block) => {
             let mut ghost_post = post;
             for s in block.statements.iter().rev() {
                 ghost_post = compute_wp(s, ghost_post, ensures_wp, assigns);
@@ -169,17 +170,17 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[Hi
 }
 
 fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[HirExpr]) -> SmtExpr {
-    match expr {
-        HirExpr::Block(block, _) => {
+    match &expr.kind {
+        HirExprKind::Block(block, _) => {
             let mut block_wp = post;
             for s in block.statements.iter().rev() {
                 block_wp = compute_wp(s, block_wp, ensures_wp, assigns);
             }
             block_wp
         }
-        HirExpr::Try(inner, _) => {
+        HirExprKind::Try(inner, _) => {
             let tmp_name = format!("__try_tmp_{}", var_name);
-            let tmp_var = SmtExpr::Var(tmp_name.clone());
+            let tmp_var = SmtExpr::Var(tmp_name.clone(), "Int".into());
             let is_ok = SmtExpr::FuncCall("is_ok".into(), vec![tmp_var.clone()]);
             let unwrap_ok = SmtExpr::FuncCall("unwrap_ok".into(), vec![tmp_var.clone()]);
             let unwrap_err = SmtExpr::FuncCall("unwrap_err".into(), vec![tmp_var.clone()]);
@@ -195,9 +196,9 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             
             wp_eval_expr(inner, &tmp_name, branches, ensures_wp, assigns)
         }
-        HirExpr::Match(cond, arms, _) => {
+        HirExprKind::Match(cond, arms, _) => {
             let tmp_cond = format!("__match_cond_{}", var_name);
-            let cond_var = SmtExpr::Var(tmp_cond.clone());
+            let cond_var = SmtExpr::Var(tmp_cond.clone(), "Int".into());
             
             let mut final_wp = SmtExpr::BoolConst(true);
             for (pat, arm_expr) in arms {
@@ -214,7 +215,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             
             wp_eval_expr(cond, &tmp_cond, final_wp, ensures_wp, assigns)
         }
-        HirExpr::If(cond, thn, els, _) => {
+        HirExprKind::If(cond, thn, els, _) => {
             let mut thn_wp = post.clone();
             for s in thn.statements.iter().rev() {
                 thn_wp = compute_wp(s, thn_wp, ensures_wp, assigns);
@@ -227,7 +228,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             }
             
             let tmp_cond = format!("__if_cond_{}", var_name);
-            let cond_var = SmtExpr::Var(tmp_cond.clone());
+            let cond_var = SmtExpr::Var(tmp_cond.clone(), "Int".into());
             
             let ite_wp = SmtExpr::And(
                 Box::new(SmtExpr::Implies(Box::new(cond_var.clone()), Box::new(thn_wp))),
@@ -236,24 +237,24 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             
             wp_eval_expr(cond, &tmp_cond, ite_wp, ensures_wp, assigns)
         }
-        HirExpr::ResultOk(inner, _) => {
+        HirExprKind::ResultOk(inner, _) => {
             let tmp_name = format!("__ok_{}", var_name);
-            let tmp_var = SmtExpr::Var(tmp_name.clone());
+            let tmp_var = SmtExpr::Var(tmp_name.clone(), "Int".into());
             let mk_ok = SmtExpr::FuncCall("mk_ok".into(), vec![tmp_var]);
             let post_sub = post.substitute(var_name, &mk_ok);
             wp_eval_expr(inner, &tmp_name, post_sub, ensures_wp, assigns)
         }
-        HirExpr::ResultErr(inner, _) => {
+        HirExprKind::ResultErr(inner, _) => {
             let tmp_name = format!("__err_{}", var_name);
-            let tmp_var = SmtExpr::Var(tmp_name.clone());
+            let tmp_var = SmtExpr::Var(tmp_name.clone(), "Int".into());
             let mk_err = SmtExpr::FuncCall("mk_err".into(), vec![tmp_var]);
             let post_sub = post.substitute(var_name, &mk_err);
             wp_eval_expr(inner, &tmp_name, post_sub, ensures_wp, assigns)
         }
-        HirExpr::VariantConstructor(_, case, args, _) => {
+        HirExprKind::VariantConstructor(_, case, args, _) => {
             if case == "Some" && args.len() == 1 {
                 let tmp_name = format!("__some_{}", var_name);
-                let tmp_var = SmtExpr::Var(tmp_name.clone());
+                let tmp_var = SmtExpr::Var(tmp_name.clone(), "Int".into());
                 let mk_ok = SmtExpr::FuncCall("mk_ok".into(), vec![tmp_var]);
                 let post_sub = post.substitute(var_name, &mk_ok);
                 wp_eval_expr(&args[0], &tmp_name, post_sub, ensures_wp, assigns)
@@ -264,23 +265,23 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
                 post.substitute(var_name, &SmtExpr::BoolConst(false))
             }
         }
-        HirExpr::BinaryOp(op, l, r, _) => {
+        HirExprKind::BinaryOp(op, l, r, _) => {
             let tmp_l = format!("{}_l", var_name);
             let tmp_r = format!("{}_r", var_name);
             
             let op_smt = match op {
-                BinaryOp::Add => SmtExpr::Add(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Sub => SmtExpr::Sub(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Mul => SmtExpr::Mul(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Div => SmtExpr::Div(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Eq => SmtExpr::Eq(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Neq => SmtExpr::Not(Box::new(SmtExpr::Eq(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))))),
-                BinaryOp::Lt => SmtExpr::Lt(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Gt => SmtExpr::Gt(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Le => SmtExpr::Le(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Ge => SmtExpr::Ge(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::And => SmtExpr::And(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
-                BinaryOp::Or => SmtExpr::Or(Box::new(SmtExpr::Var(tmp_l.clone())), Box::new(SmtExpr::Var(tmp_r.clone()))),
+                BinaryOp::Add => SmtExpr::Add(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Sub => SmtExpr::Sub(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Mul => SmtExpr::Mul(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Div => SmtExpr::Div(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Eq => SmtExpr::Eq(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Neq => SmtExpr::Not(Box::new(SmtExpr::Eq(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))))),
+                BinaryOp::Lt => SmtExpr::Lt(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Gt => SmtExpr::Gt(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Le => SmtExpr::Le(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Ge => SmtExpr::Ge(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::And => SmtExpr::And(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
+                BinaryOp::Or => SmtExpr::Or(Box::new(SmtExpr::Var(tmp_l.clone(), "Int".into())), Box::new(SmtExpr::Var(tmp_r.clone(), "Int".into()))),
                 _ => SmtExpr::BoolConst(false),
             };
             
@@ -288,7 +289,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             let wp_r = wp_eval_expr(r, &tmp_r, p_sub, ensures_wp, assigns);
             wp_eval_expr(l, &tmp_l, wp_r, ensures_wp, assigns)
         }
-        HirExpr::Call(func, args, ty) => {
+        HirExprKind::Call(func, args, ty) => {
             let mut current_post = post;
             let mut arg_vars = Vec::new();
             for i in 0..args.len() {
@@ -296,10 +297,10 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             }
             
             let call_smt = if func == "valid" || func == "valid_read" || func == "separated" {
-                let smt_args: Vec<SmtExpr> = arg_vars.iter().map(|n| SmtExpr::Var(n.clone())).collect();
+                let smt_args: Vec<SmtExpr> = arg_vars.iter().map(|n| SmtExpr::Var(n.clone(), "Int".into())).collect();
                 SmtExpr::FuncCall(func.clone(), smt_args)
             } else if ty == &HirType::I32 {
-                SmtExpr::Var(format!("__call_{}", func))
+                SmtExpr::Var(format!("__call_{}", func), "Int".into())
             } else {
                 SmtExpr::BoolConst(false)
             };
@@ -317,7 +318,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
 }
 
 fn pattern_to_smt(pat: &crate::hir::HirPattern, val: &SmtExpr) -> (SmtExpr, Vec<(String, SmtExpr)>) {
-    use crate::hir::HirPattern;
+    use crate::hir::{HirExprKind, HirStmtKind, HirPattern};
     match pat {
         HirPattern::Wildcard => (SmtExpr::BoolConst(true), vec![]),
         HirPattern::Binding(name) => (SmtExpr::BoolConst(true), vec![(name.clone(), val.clone())]),
@@ -354,33 +355,33 @@ fn hir_type_to_smt_sort(ty: &crate::hir::HirType) -> String {
 }
 
 pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
-    match expr {
-        HirExpr::IntLiteral(v, _) => SmtExpr::IntConst(*v),
-        HirExpr::BoolLiteral(v, _) => SmtExpr::BoolConst(*v),
-        HirExpr::VarRef(name, _) => SmtExpr::Var(name.clone()),
-        HirExpr::EnumVariant(_, _, val, _) => SmtExpr::IntConst(*val as i64),
-        HirExpr::Quantifier(kind, params, body, _) => {
+    match &expr.kind {
+        HirExprKind::IntLiteral(v, _) => SmtExpr::IntConst(*v),
+        HirExprKind::BoolLiteral(v, _) => SmtExpr::BoolConst(*v),
+        HirExprKind::VarRef(name, ty) => SmtExpr::Var(name.clone(), hir_type_to_smt_sort(ty)),
+        HirExprKind::EnumVariant(_, _, val, _) => SmtExpr::IntConst(*val as i64),
+        HirExprKind::Quantifier(kind, params, body, _) => {
             let body_smt = Box::new(hir_to_smt(body));
-            let bounds: Vec<(String, String)> = params.iter().map(|(n, t)| (n.clone(), hir_type_to_smt_sort(t))).collect();
+            let bounds: Vec<(String, String)> = params.iter().map(|(n, t): &(String, HirType)| (n.clone(), hir_type_to_smt_sort(t))).collect();
             match kind {
                 crate::hir::QuantifierKind::Forall => SmtExpr::Forall(bounds, body_smt),
                 crate::hir::QuantifierKind::Exists => SmtExpr::Exists(bounds, body_smt),
                 crate::hir::QuantifierKind::Choose => {
-                    SmtExpr::Var(format!("__choose_{}", params.first().map(|(n, _)| n.clone()).unwrap_or_default()))
+                    SmtExpr::Var(format!("__choose_{}", params.first().map(|(n, _): &(String, HirType)| n.clone()).unwrap_or_default()), "Int".into())
                 }
             }
         }
-        HirExpr::Call(name, args, ty) => {
+        HirExprKind::Call(name, args, ty) => {
             if name == "valid" || name == "valid_read" || name == "separated" {
                 let smt_args: Vec<SmtExpr> = args.iter().map(|a| hir_to_smt(a)).collect();
                 SmtExpr::FuncCall(name.clone(), smt_args)
             } else if ty == &HirType::I32 {
-                SmtExpr::Var(format!("__call_{}", name)) // Treat as an arbitrary variable
+                SmtExpr::Var(format!("__call_{}", name), "Int".into()) // Treat as an arbitrary variable
             } else {
                 SmtExpr::BoolConst(false)
             }
         }
-        HirExpr::BinaryOp(op, lhs, rhs, _) => {
+        HirExprKind::BinaryOp(op, lhs, rhs, _) => {
             let lhs_smt = Box::new(hir_to_smt(lhs));
             let rhs_smt = Box::new(hir_to_smt(rhs));
             match op {
@@ -401,13 +402,13 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
                 _ => SmtExpr::BoolConst(false), // fallback
             }
         }
-        HirExpr::ResultOk(inner, _) => SmtExpr::FuncCall("mk_ok".to_string(), vec![hir_to_smt(inner)]),
-        HirExpr::ResultErr(inner, _) => SmtExpr::FuncCall("mk_err".to_string(), vec![hir_to_smt(inner)]),
-        HirExpr::Block(block, _) => {
-            if let Some(crate::hir::HirStmt::Expr(e)) = block.statements.last() {
-                hir_to_smt(e)
-            } else if let Some(crate::hir::HirStmt::Return(Some(e))) = block.statements.last() {
-                hir_to_smt(e)
+        HirExprKind::ResultOk(inner, _) => SmtExpr::FuncCall("mk_ok".to_string(), vec![hir_to_smt(inner)]),
+        HirExprKind::ResultErr(inner, _) => SmtExpr::FuncCall("mk_err".to_string(), vec![hir_to_smt(inner)]),
+        HirExprKind::Block(block, _) => {
+            if let Some(crate::hir::HirStmtKind::Expr(e)) = block.statements.last().map(|s| &s.kind) {
+                hir_to_smt(&e)
+            } else if let Some(crate::hir::HirStmtKind::Return(Some(e))) = block.statements.last().map(|s| &s.kind) {
+                hir_to_smt(&e)
             } else {
                 SmtExpr::BoolConst(false)
             }
@@ -417,74 +418,74 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
 }
 
 fn collect_modified_vars_stmt(stmt: &HirStmt, vars: &mut std::collections::HashSet<String>) {
-    match stmt {
-        HirStmt::Expr(expr) => collect_modified_vars_expr(expr, vars),
-        HirStmt::While(_, body, _, _, _) | HirStmt::For(_, _, body, _) | HirStmt::GhostBlock(body) => {
+    match &stmt.kind {
+        HirStmtKind::Expr(expr) => collect_modified_vars_expr(expr, vars),
+        HirStmtKind::While(_, body, _, _, _) | HirStmtKind::For(_, _, body, _) | HirStmtKind::GhostBlock(body) => {
             for s in &body.statements {
                 collect_modified_vars_stmt(s, vars);
             }
         }
-        HirStmt::Let(_, _, _, init) => collect_modified_vars_expr(init, vars),
-        HirStmt::Return(Some(e)) => collect_modified_vars_expr(e, vars),
-        HirStmt::Assert(e) | HirStmt::Assume(e) => collect_modified_vars_expr(e, vars),
+        HirStmtKind::Let(_, _, _, init) => collect_modified_vars_expr(init, vars),
+        HirStmtKind::Return(Some(e)) => collect_modified_vars_expr(e, vars),
+        HirStmtKind::Assert(e) | HirStmtKind::Assume(e) => collect_modified_vars_expr(e, vars),
         _ => {}
     }
 }
 
 fn collect_modified_vars_expr(expr: &HirExpr, vars: &mut std::collections::HashSet<String>) {
-    match expr {
-        HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
-            if let HirExpr::VarRef(name, _) = lhs.as_ref() {
+    match &expr.kind {
+        HirExprKind::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
+            if let HirExprKind::VarRef(name, _) = &lhs.kind {
                 vars.insert(name.clone());
             }
             collect_modified_vars_expr(rhs, vars);
         }
-        HirExpr::BinaryOp(_, lhs, rhs, _) => {
+        HirExprKind::BinaryOp(_, lhs, rhs, _) => {
             collect_modified_vars_expr(lhs, vars);
             collect_modified_vars_expr(rhs, vars);
         }
-        HirExpr::UnaryOp(_, inner, _) | HirExpr::Ref(inner, _, _) | HirExpr::Deref(inner, _) |
-        HirExpr::Try(inner, _) | HirExpr::ResultOk(inner, _) | HirExpr::ResultErr(inner, _) |
-        HirExpr::FieldAccess(inner, _, _) => {
+        HirExprKind::UnaryOp(_, inner, _) | HirExprKind::Ref(inner, _, _) | HirExprKind::Deref(inner, _) |
+        HirExprKind::Try(inner, _) | HirExprKind::ResultOk(inner, _) | HirExprKind::ResultErr(inner, _) |
+        HirExprKind::FieldAccess(inner, _, _) => {
             collect_modified_vars_expr(inner, vars);
         }
-        HirExpr::Call(_, args, _) | HirExpr::VariantConstructor(_, _, args, _) | HirExpr::ArrayExpr(args, _) => {
+        HirExprKind::Call(_, args, _) | HirExprKind::VariantConstructor(_, _, args, _) | HirExprKind::ArrayExpr(args, _) => {
             for arg in args {
                 collect_modified_vars_expr(arg, vars);
             }
         }
-        HirExpr::CallIndirect(callee, args, _) => {
+        HirExprKind::CallIndirect(callee, args, _) => {
             collect_modified_vars_expr(callee, vars);
             for arg in args {
                 collect_modified_vars_expr(arg, vars);
             }
         }
-        HirExpr::If(cond, thn, els, _) => {
+        HirExprKind::If(cond, thn, els, _) => {
             collect_modified_vars_expr(cond, vars);
             for s in &thn.statements { collect_modified_vars_stmt(s, vars); }
             if let Some(e) = els {
                 for s in &e.statements { collect_modified_vars_stmt(s, vars); }
             }
         }
-        HirExpr::Match(cond, arms, _) => {
+        HirExprKind::Match(cond, arms, _) => {
             collect_modified_vars_expr(cond, vars);
             for (_, arm) in arms {
                 collect_modified_vars_expr(arm, vars);
             }
         }
-        HirExpr::Block(block, _) => {
+        HirExprKind::Block(block, _) => {
             for s in &block.statements { collect_modified_vars_stmt(s, vars); }
         }
-        HirExpr::IndexExpr(base, idx, _) => {
+        HirExprKind::IndexExpr(base, idx, _) => {
             collect_modified_vars_expr(base, vars);
             collect_modified_vars_expr(idx, vars);
         }
-        HirExpr::SliceExpr(base, start, end, _) => {
+        HirExprKind::SliceExpr(base, start, end, _) => {
             collect_modified_vars_expr(base, vars);
             collect_modified_vars_expr(start, vars);
             collect_modified_vars_expr(end, vars);
         }
-        HirExpr::StructExpr(_, fields, _) => {
+        HirExprKind::StructExpr(_, fields, _) => {
             for (_, f) in fields {
                 collect_modified_vars_expr(f, vars);
             }
@@ -496,7 +497,8 @@ fn collect_modified_vars_expr(expr: &HirExpr, vars: &mut std::collections::HashS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{HirType, HirExpr, HirStmt, BinaryOp};
+    use crate::hir::Span;
+    use crate::hir::{HirExprKind, HirStmtKind, HirType, HirExpr, HirStmt, BinaryOp};
     use crate::verification::smt::SmtExpr;
 
     // ------------------------------------------------------------------
@@ -507,15 +509,15 @@ mod tests {
     #[test]
     fn test_wp_assert() {
         // WP(assert x > 0, true) = (x > 0) && true
-        let q = HirExpr::BinaryOp(
+        let q = HirExprKind::BinaryOp(
             BinaryOp::Gt,
-            Box::new(HirExpr::VarRef("x".into(), HirType::I32)),
-            Box::new(HirExpr::IntLiteral(0, HirType::I32)),
+            Box::new(HirExpr::new(HirExprKind::VarRef("x".into(), HirType::I32), Span::default())),
+            Box::new(HirExpr::new(HirExprKind::IntLiteral(0, HirType::I32), Span::default())),
             HirType::Bool,
         );
         let post = SmtExpr::BoolConst(true);
         let ensures_wp = SmtExpr::BoolConst(true);
-        let wp = compute_wp(&HirStmt::Assert(q), post, &ensures_wp);
+        let wp = compute_wp(&HirStmt::new(HirStmtKind::Assert(HirExpr::new(q, Span::default())), Span::default()), post, &ensures_wp, &[]);
         assert_eq!(wp.to_smtlib2(), "(and (> x 0) true)");
     }
 
@@ -523,15 +525,15 @@ mod tests {
     #[test]
     fn test_wp_assume() {
         // WP(assume x > 0, true) = (x > 0) => true
-        let q = HirExpr::BinaryOp(
+        let q = HirExprKind::BinaryOp(
             BinaryOp::Gt,
-            Box::new(HirExpr::VarRef("x".into(), HirType::I32)),
-            Box::new(HirExpr::IntLiteral(0, HirType::I32)),
+            Box::new(HirExpr::new(HirExprKind::VarRef("x".into(), HirType::I32), Span::default())),
+            Box::new(HirExpr::new(HirExprKind::IntLiteral(0, HirType::I32), Span::default())),
             HirType::Bool,
         );
         let post = SmtExpr::BoolConst(true);
         let ensures_wp = SmtExpr::BoolConst(true);
-        let wp = compute_wp(&HirStmt::Assume(q), post, &ensures_wp);
+        let wp = compute_wp(&HirStmt::new(HirStmtKind::Assume(HirExpr::new(q, Span::default())), Span::default()), post, &ensures_wp, &[]);
         assert_eq!(wp.to_smtlib2(), "(=> (> x 0) true)");
     }
 
@@ -539,32 +541,32 @@ mod tests {
     #[test]
     fn test_wp_let_substitution() {
         // WP(const x = 5, x > 0) = 5 > 0
-        let init = HirExpr::IntLiteral(5, HirType::I32);
+        let init = HirExprKind::IntLiteral(5, HirType::I32);
         let post = SmtExpr::Gt(
-            Box::new(SmtExpr::Var("x".into())),
+            Box::new(SmtExpr::Var("x".into(), "Int".into())),
             Box::new(SmtExpr::IntConst(0)),
         );
         let ensures_wp = SmtExpr::BoolConst(true);
-        let wp = compute_wp(&HirStmt::Let("x".into(), true, HirType::I32, init), post, &ensures_wp);
+        let wp = compute_wp(&HirStmt::new(HirStmtKind::Let("x".into(), true, HirType::I32, HirExpr::new(init, Span::default())), Span::default()), post, &ensures_wp, &[]);
         assert_eq!(wp.to_smtlib2(), "(> 5 0)");
     }
 
-    /// WP(x = E, P) = P[E/x] — exercises the bug fix for assignment via HirStmt::Expr.
+    /// WP(x = E, P) = P[E/x] — exercises the bug fix for assignment via HirStmtKind::Expr.
     #[test]
     fn test_wp_assignment_substitution() {
         // WP(x = 10, x == 10) should give: 10 == 10  (i.e., true)
-        let assign = HirExpr::BinaryOp(
+        let assign = HirExprKind::BinaryOp(
             BinaryOp::Assign,
-            Box::new(HirExpr::VarRef("x".into(), HirType::I32)),
-            Box::new(HirExpr::IntLiteral(10, HirType::I32)),
+            Box::new(HirExpr::new(HirExprKind::VarRef("x".into(), HirType::I32), Span::default())),
+            Box::new(HirExpr::new(HirExprKind::IntLiteral(10, HirType::I32), Span::default())),
             HirType::I32,
         );
         let post = SmtExpr::Eq(
-            Box::new(SmtExpr::Var("x".into())),
+            Box::new(SmtExpr::Var("x".into(), "Int".into())),
             Box::new(SmtExpr::IntConst(10)),
         );
         let ensures_wp = SmtExpr::BoolConst(true);
-        let wp = compute_wp(&HirStmt::Expr(assign), post, &ensures_wp);
+        let wp = compute_wp(&HirStmt::new(HirStmtKind::Expr(HirExpr::new(assign, Span::default())), Span::default()), post, &ensures_wp, &[]);
         // After substitution x -> 10 in (= x 10): (= 10 10)
         assert_eq!(wp.to_smtlib2(), "(= 10 10)");
     }
@@ -576,45 +578,45 @@ mod tests {
     /// IntLiteral lowers to IntConst.
     #[test]
     fn test_hir_to_smt_int_literal() {
-        let expr = HirExpr::IntLiteral(42, HirType::I32);
-        assert_eq!(hir_to_smt(&expr).to_smtlib2(), "42");
+        let expr = HirExprKind::IntLiteral(42, HirType::I32);
+        assert_eq!(hir_to_smt(&HirExpr::new(expr, Span::default())).to_smtlib2(), "42");
     }
 
     /// BoolLiteral lowers to BoolConst.
     #[test]
     fn test_hir_to_smt_bool_literal() {
-        assert_eq!(hir_to_smt(&HirExpr::BoolLiteral(true, HirType::Bool)).to_smtlib2(), "true");
-        assert_eq!(hir_to_smt(&HirExpr::BoolLiteral(false, HirType::Bool)).to_smtlib2(), "false");
+        assert_eq!(hir_to_smt(&HirExpr::new(HirExprKind::BoolLiteral(true, HirType::Bool), Span::default())).to_smtlib2(), "true");
+        assert_eq!(hir_to_smt(&HirExpr::new(HirExprKind::BoolLiteral(false, HirType::Bool), Span::default())).to_smtlib2(), "false");
     }
 
     /// VarRef lowers to Var with the same name.
     #[test]
     fn test_hir_to_smt_var_ref() {
-        let expr = HirExpr::VarRef("my_var".into(), HirType::I32);
-        assert_eq!(hir_to_smt(&expr).to_smtlib2(), "my_var");
+        let expr = HirExprKind::VarRef("my_var".into(), HirType::I32);
+        assert_eq!(hir_to_smt(&HirExpr::new(expr, Span::default())).to_smtlib2(), "my_var");
     }
 
     /// BinaryOp::Add lowers to SmtExpr::Add.
     #[test]
     fn test_hir_to_smt_add() {
-        let expr = HirExpr::BinaryOp(
+        let expr = HirExprKind::BinaryOp(
             BinaryOp::Add,
-            Box::new(HirExpr::IntLiteral(1, HirType::I32)),
-            Box::new(HirExpr::IntLiteral(2, HirType::I32)),
+            Box::new(HirExpr::new(HirExprKind::IntLiteral(1, HirType::I32), Span::default())),
+            Box::new(HirExpr::new(HirExprKind::IntLiteral(2, HirType::I32), Span::default())),
             HirType::I32,
         );
-        assert_eq!(hir_to_smt(&expr).to_smtlib2(), "(+ 1 2)");
+        assert_eq!(hir_to_smt(&HirExpr::new(expr, Span::default())).to_smtlib2(), "(+ 1 2)");
     }
 
     /// BinaryOp::Lt lowers to SmtExpr::Lt.
     #[test]
     fn test_hir_to_smt_comparison() {
-        let expr = HirExpr::BinaryOp(
+        let expr = HirExprKind::BinaryOp(
             BinaryOp::Lt,
-            Box::new(HirExpr::VarRef("x".into(), HirType::I32)),
-            Box::new(HirExpr::IntLiteral(5, HirType::I32)),
+            Box::new(HirExpr::new(HirExprKind::VarRef("x".into(), HirType::I32), Span::default())),
+            Box::new(HirExpr::new(HirExprKind::IntLiteral(5, HirType::I32), Span::default())),
             HirType::Bool,
         );
-        assert_eq!(hir_to_smt(&expr).to_smtlib2(), "(< x 5)");
+        assert_eq!(hir_to_smt(&HirExpr::new(expr, Span::default())).to_smtlib2(), "(< x 5)");
     }
 }

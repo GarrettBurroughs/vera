@@ -1,0 +1,21 @@
+// run-pass
+type Nat = i32;
+
+struct Container<T> {
+    val: T,
+    id: Nat,
+}
+
+func get_val<T>(c: Container<T>): T {
+    return c.val;
+}
+
+func main(): i32 {
+    var c: Container<i32> = Container { val: 42, id: 10 };
+    var r: i32 = get_val::<i32>(c);
+    
+    if r == 42 {
+        return 0;
+    }
+    return 1;
+}
