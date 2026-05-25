@@ -8,6 +8,7 @@ mod hir;
 mod backend;
 mod verification;
 mod workspace;
+mod query;
 use crate::parser::ast::AstNode;
 
 #[derive(Parser, Debug)]
@@ -79,80 +80,70 @@ fn setup_logging(cli: &Cli) {
 
 fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Option<String>) -> Result<String, ()> {
     info!("Starting compilation for {}", file);
-    
-    let mut workspace = workspace::Workspace::new();
-    let entry_file_id = workspace.load_entry_file(file).map_err(|e| {
+
+    let mut qctx = query::QueryContext::new();
+    let entry_file_id = qctx.load_entry_file(file).map_err(|e| {
         error!("Workspace error: {:?}", e);
     })?;
-    
-    if let Some(emit_target) = &cli.emit {
-        if emit_target == "cst" {
-            let entry_data = workspace.files.get(&entry_file_id).unwrap();
-            println!("{:#?}", entry_data.ast);
+
+    if cli.emit.as_deref() == Some("cst") {
+        let entry_data = qctx.workspace().files.get(&entry_file_id).unwrap();
+        println!("{:#?}", entry_data.ast);
+        return Err(());
+    }
+
+    if qctx.has_parse_errors() {
+        return Err(());
+    }
+
+    // HIR lowering
+    {
+        let (_, errors) = qctx.query_hir_program();
+        if !errors.is_empty() {
+            for err in errors {
+                error!("Semantic Error: {err}");
+            }
             return Err(());
         }
     }
-    
-    let mut has_errors = false;
-    
-    // Check if any file in the workspace had parser errors
-    for file_data in workspace.files.values() {
-        if file_data.has_errors {
-            has_errors = true;
-        }
-    }
-    
-    if has_errors {
+
+    if cli.emit.as_deref() == Some("hir") {
+        let (prog, _) = qctx.query_hir_program();
+        println!("{prog:#?}");
         return Err(());
     }
-    
-    let mut lower_ctx = hir::lower::LoweringContext::new();
-    let hir_program = lower_ctx.lower_program(&workspace);
-    
-    if !lower_ctx.errors.is_empty() {
-        for err in lower_ctx.errors { error!("Semantic Error: {}", err); }
-        has_errors = true;
-    }
-    
-    if let Some(emit_target) = &cli.emit
-        && emit_target == "hir" {
-            println!("{:#?}", hir_program);
+
+    // Borrow checking
+    {
+        let errors = qctx.query_borrow_check();
+        if !errors.is_empty() {
+            for err in errors {
+                error!("Borrow Error: {err}");
+            }
             return Err(());
         }
-    
-    let mut borrow_ck = hir::borrowck::BorrowChecker::new();
-    borrow_ck.check_program(&hir_program);
-    if !borrow_ck.errors.is_empty() {
-        for err in borrow_ck.errors { error!("Borrow Error: {}", err); }
-        has_errors = true;
     }
-    
-    if has_errors {
-        return Err(());
-    }
-    
+
     if cli.verify {
         info!("Running verification pipeline");
-        if let Err(e) = verification::verify_program(&hir_program) {
+        if let Err(e) = qctx.query_verify_program() {
             error!("Verification Error: {:?}", e);
             return Err(());
         }
     } else {
         warn!("Verification skipped (use --verify to enable)");
     }
-    
+
     if is_check {
         info!("Check complete. Halting before LLVM codegen.");
         return Ok("".to_string());
     }
-    
-    if let Some(emit_target) = &cli.emit
-        && emit_target == "llvm" {
-            unsafe { std::env::set_var("PRINT_IR", "1") };
-        }
+
+    if cli.emit.as_deref() == Some("llvm") {
+        unsafe { std::env::set_var("PRINT_IR", "1") };
+    }
 
     let emit_obj = cli.emit.as_deref() == Some("obj");
-
     let out_path = if emit_obj {
         output_bin.unwrap_or_else(|| "a.o".to_string())
     } else {
@@ -163,7 +154,8 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         target: cli.target.as_deref(),
         emit_obj_only: emit_obj,
     };
-    backend::compile_with_options(&hir_program, &out_path, &opts).expect("Failed to compile");
+    let (hir_program, _) = qctx.query_hir_program();
+    backend::compile_with_options(hir_program, &out_path, &opts).expect("Failed to compile");
     info!("Compilation finished: {}", out_path);
 
     Ok(out_path)

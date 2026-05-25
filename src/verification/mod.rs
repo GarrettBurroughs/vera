@@ -3,7 +3,7 @@ pub mod smt;
 
 use crate::hir::HirProgram;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)] // String payload fields are observed via the Debug impl in error reporting
 pub enum VerificationError {
     Z3Error(String),

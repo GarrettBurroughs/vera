@@ -109,6 +109,24 @@ impl Workspace {
         None
     }
 
+    /// Load a file from an in-memory source string, bypassing disk I/O.
+    /// Useful for LSP text-sync and unit tests.
+    pub fn load_from_source(&mut self, path: &Path, source: String) -> FileId {
+        let parser = crate::parser::Parser::new(&source);
+        let (cst, errors) = parser.parse();
+        let has_errors = !errors.is_empty();
+        let ast = SourceFile::cast(cst).expect("root must be SourceFile");
+        let file_id = self.next_file_id;
+        self.next_file_id += 1;
+        self.files.insert(file_id, FileData {
+            path: path.to_path_buf(),
+            source,
+            ast,
+            has_errors,
+        });
+        file_id
+    }
+
     fn load_file(&mut self, path: &Path) -> miette::Result<FileId> {
         let source = std::fs::read_to_string(path).map_err(|_| FileNotFound { path: path.to_path_buf() })?;
         
