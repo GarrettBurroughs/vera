@@ -70,10 +70,10 @@ This document outlines the macro-level phases required to build the complete Ver
 - [x] **Binary Output**: Expand `compile_to_binary` to cross-compile executable ELF/PE formats and object files properly linking system `libc`.
 
 ### 4. Language Server Protocol (LSP) Features
-- [ ] **LSP Server Backbone**: Basic text document sync, initialization, and client-server JSON-RPC communication.
-- [ ] **Diagnostic Syncing**: Publish parsing, semantic, and verification errors to the editor.
-- [ ] **Inline Proof Status**: Visual checkmarks and feedback for verified functions and assertions.
+- [x] **LSP Server Backbone**: Basic text document sync, initialization, and client-server JSON-RPC communication.
+- [x] **Diagnostic Syncing**: Publish parsing, semantic, and verification errors to the editor.
+- [x] **Inline Proof Status**: Visual checkmarks and feedback for verified functions and assertions.
 - [ ] **Visual Counterexample Debugging**: Parse Z3 models, filter to local scope, and project inline virtual text (inlay hints) on assertion failures.
-- [ ] **Incremental Asynchronous Proofs**: Background thread execution for verification queries, non-blocking UI, configurable solver timeouts.
+- [x] **Incremental Asynchronous Proofs**: Background thread execution for verification queries, non-blocking UI, configurable solver timeouts.
 - [ ] **Refactoring & IDE Intelligence**: Rename symbols, formatting (using the lossless CST), Go-to Definition, Auto-completion.
 
