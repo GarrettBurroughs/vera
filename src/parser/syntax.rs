@@ -12,6 +12,7 @@ pub enum SyntaxKind {
     KwType, KwWhere, KwTrait, KwImpl, KwFor, KwConst, KwVar, KwIf, KwElse, KwWhile,
     KwIn, KwReturn, KwBreak, KwContinue, KwGhost, KwMatch, KwCase, KwUnsafe,
     KwSpec, KwRequires, KwEnsures, KwAssert, KwAssume, KwAssigns, KwInvariant, KwDecreases,
+    KwForall, KwExists, KwChoose,
     
     TyBool, TyI8, TyI16, TyI32, TyI64, TyU8, TyU16, TyU32, TyU64,
     TyW8, TyW16, TyW32, TyW64, TyF32, TyF64, TyChar, TyVoid, TyString,
@@ -88,6 +89,7 @@ pub enum SyntaxKind {
     GENERIC_PARAMS,
     GENERIC_ARGS,
     GENERIC_INST_EXPR,
+    QUANTIFIER_EXPR,
     TYPE_ALIAS,
     REFINEMENT_TYPE,
     ERROR_NODE,
@@ -156,6 +158,9 @@ impl From<Token> for SyntaxKind {
             Token::KwAssigns => SyntaxKind::KwAssigns,
             Token::KwInvariant => SyntaxKind::KwInvariant,
             Token::KwDecreases => SyntaxKind::KwDecreases,
+            Token::KwForall => SyntaxKind::KwForall,
+            Token::KwExists => SyntaxKind::KwExists,
+            Token::KwChoose => SyntaxKind::KwChoose,
             
             Token::Eq => SyntaxKind::Eq,
             Token::EqEq => SyntaxKind::EqEq,

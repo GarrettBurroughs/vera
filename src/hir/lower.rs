@@ -964,6 +964,8 @@ impl LoweringContext {
                         GreaterEq => (BinaryOp::Ge, HirType::I32, HirType::Bool),
                         AmpAmp => (BinaryOp::And, HirType::Bool, HirType::Bool),
                         PipePipe => (BinaryOp::Or, HirType::Bool, HirType::Bool),
+                        Implies => (BinaryOp::Implies, HirType::Bool, HirType::Bool),
+                        Iff => (BinaryOp::Iff, HirType::Bool, HirType::Bool),
                         Eq => (BinaryOp::Assign, lhs.ty(), lhs.ty()), // Assignment returns the value
                         _ => return HirExpr::Error,
                     };
@@ -1355,6 +1357,53 @@ impl LoweringContext {
                 // TODO: Implement generic instantiation monomorphization
                 HirExpr::Error
             }
+            ast::Expr::QuantifierExpr(quant) => {
+                let kind_token = quant.quantifier_token().map(|t| t.kind()).unwrap_or(crate::parser::syntax::SyntaxKind::ERROR_NODE);
+                let kind = match kind_token {
+                    crate::parser::syntax::SyntaxKind::KwForall => crate::hir::QuantifierKind::Forall,
+                    crate::parser::syntax::SyntaxKind::KwExists => crate::hir::QuantifierKind::Exists,
+                    crate::parser::syntax::SyntaxKind::KwChoose => crate::hir::QuantifierKind::Choose,
+                    _ => crate::hir::QuantifierKind::Forall,
+                };
+                
+                self.enter_scope();
+                let mut params = Vec::new();
+                for param in quant.params() {
+                    let name = param.name().unwrap_or_default();
+                    let ty = param.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
+                    self.declare_var(name.clone(), ty.clone(), true);
+                    params.push((name, ty));
+                }
+                
+                let body = if let Some(b) = quant.body() {
+                    let lowered_block = self.lower_block(&b);
+                    let ret_ty = match lowered_block.statements.last() {
+                        Some(crate::hir::HirStmt::Expr(e)) => e.ty(),
+                        Some(crate::hir::HirStmt::Return(Some(e))) => e.ty(),
+                        _ => HirType::Void,
+                    };
+                    HirExpr::Block(lowered_block, ret_ty)
+                } else if let Some(e) = quant.expr() {
+                    self.lower_expr(&e)
+                } else {
+                    HirExpr::Error
+                };
+                self.exit_scope();
+                
+                let ret_ty = match kind {
+                    crate::hir::QuantifierKind::Forall | crate::hir::QuantifierKind::Exists => HirType::Bool,
+                    crate::hir::QuantifierKind::Choose => {
+                        if params.len() == 1 {
+                            params[0].1.clone()
+                        } else {
+                            self.errors.push(SemanticError::Custom("choose quantifier must have exactly one parameter".to_string()));
+                            HirType::Error
+                        }
+                    }
+                };
+                
+                HirExpr::Quantifier(kind, params, Box::new(body), ret_ty)
+            }
         }
     }
 
@@ -1473,6 +1522,13 @@ fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, c
         HirExpr::Closure(params, body, _, _) => {
             let mut new_bound = bound.clone();
             for p in params {
+                new_bound.insert(p.clone());
+            }
+            get_captures(body, &mut new_bound, captures);
+        }
+        HirExpr::Quantifier(_, params, body, _) => {
+            let mut new_bound = bound.clone();
+            for (p, _) in params {
                 new_bound.insert(p.clone());
             }
             get_captures(body, &mut new_bound, captures);

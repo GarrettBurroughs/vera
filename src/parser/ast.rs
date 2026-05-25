@@ -79,6 +79,7 @@ ast_node!(DerefExpr, SyntaxKind::DEREF_EXPR);
 ast_node!(UnsafeBlock, SyntaxKind::UNSAFE_BLOCK);
 ast_node!(ClosureExpr, SyntaxKind::CLOSURE_EXPR);
 ast_node!(GenericInstExpr, SyntaxKind::GENERIC_INST_EXPR);
+ast_node!(QuantifierExpr, SyntaxKind::QUANTIFIER_EXPR);
 
 ast_node!(StructExpr, SyntaxKind::STRUCT_EXPR);
 ast_node!(StructExprFieldList, SyntaxKind::STRUCT_EXPR_FIELD_LIST);
@@ -158,6 +159,7 @@ pub enum Expr {
     UnsafeBlock(UnsafeBlock),
     ClosureExpr(ClosureExpr),
     GenericInstExpr(GenericInstExpr),
+    QuantifierExpr(QuantifierExpr),
 }
 
 impl Expr {
@@ -181,6 +183,7 @@ impl Expr {
             SyntaxKind::UNSAFE_BLOCK => UnsafeBlock::cast(node).map(Expr::UnsafeBlock),
             SyntaxKind::CLOSURE_EXPR => ClosureExpr::cast(node).map(Expr::ClosureExpr),
             SyntaxKind::GENERIC_INST_EXPR => GenericInstExpr::cast(node).map(Expr::GenericInstExpr),
+            SyntaxKind::QUANTIFIER_EXPR => QuantifierExpr::cast(node).map(Expr::QuantifierExpr),
             _ => None,
         }
     }
@@ -811,5 +814,24 @@ impl ClosureExpr {
 impl FuncType {
     pub fn types(&self) -> Vec<TypeRef> {
         self.syntax().children().filter_map(TypeRef::cast).collect()
+    }
+}
+
+impl QuantifierExpr {
+    pub fn quantifier_token(&self) -> Option<SyntaxToken> {
+        self.syntax().children_with_tokens().filter_map(|it| it.into_token())
+            .find(|it| matches!(it.kind(), SyntaxKind::KwForall | SyntaxKind::KwExists | SyntaxKind::KwChoose))
+    }
+    
+    pub fn params(&self) -> impl Iterator<Item = Param> {
+        self.syntax().children().filter_map(Param::cast)
+    }
+    
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax().children().find_map(Expr::cast)
+    }
+    
+    pub fn body(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
     }
 }

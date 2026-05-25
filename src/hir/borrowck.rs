@@ -174,7 +174,7 @@ impl BorrowChecker {
             HirExpr::Block(block, _) => {
                 self.check_block(block, ctx);
             }
-            HirExpr::Closure(_, body, _, _) => {
+            HirExpr::Closure(_, body, _, _) | HirExpr::Quantifier(_, _, body, _) => {
                 self.check_expr(body, ctx);
             }
             HirExpr::IntLiteral(_, _) | HirExpr::BoolLiteral(_, _) | HirExpr::EnumVariant(_, _, _, _) | HirExpr::Error => {}

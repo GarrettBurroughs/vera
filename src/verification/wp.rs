@@ -116,7 +116,7 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
                 
                 body_wp = SmtExpr::And(
                     Box::new(d_pos),
-                    Box::new(SmtExpr::Forall("___d0".into(), Box::new(SmtExpr::Implies(Box::new(d0_eq), Box::new(body_wp)))))
+                    Box::new(SmtExpr::Forall(vec![("___d0".into(), "Int".into())], Box::new(SmtExpr::Implies(Box::new(d0_eq), Box::new(body_wp)))))
                 );
             }
             
@@ -128,8 +128,9 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
             // Sort to ensure determinism in tests and SMT output
             let mut mod_vars_sorted: Vec<_> = mod_vars.into_iter().collect();
             mod_vars_sorted.sort();
-            for v in mod_vars_sorted {
-                quantified_body = SmtExpr::Forall(v, Box::new(quantified_body));
+            if !mod_vars_sorted.is_empty() {
+                let bounds: Vec<(String, String)> = mod_vars_sorted.into_iter().map(|v| (v, "Int".to_string())).collect();
+                quantified_body = SmtExpr::Forall(bounds, Box::new(quantified_body));
             }
             
             SmtExpr::And(Box::new(i_expr), Box::new(quantified_body))
@@ -294,12 +295,30 @@ fn pattern_to_smt(pat: &crate::hir::HirPattern, val: &SmtExpr) -> (SmtExpr, Vec<
     }
 }
 
+fn hir_type_to_smt_sort(ty: &crate::hir::HirType) -> String {
+    match ty {
+        crate::hir::HirType::Bool => "Bool".to_string(),
+        _ => "Int".to_string(), // I32 and fallback
+    }
+}
+
 pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
     match expr {
         HirExpr::IntLiteral(v, _) => SmtExpr::IntConst(*v),
         HirExpr::BoolLiteral(v, _) => SmtExpr::BoolConst(*v),
         HirExpr::VarRef(name, _) => SmtExpr::Var(name.clone()),
         HirExpr::EnumVariant(_, _, val, _) => SmtExpr::IntConst(*val as i64),
+        HirExpr::Quantifier(kind, params, body, _) => {
+            let body_smt = Box::new(hir_to_smt(body));
+            let bounds: Vec<(String, String)> = params.iter().map(|(n, t)| (n.clone(), hir_type_to_smt_sort(t))).collect();
+            match kind {
+                crate::hir::QuantifierKind::Forall => SmtExpr::Forall(bounds, body_smt),
+                crate::hir::QuantifierKind::Exists => SmtExpr::Exists(bounds, body_smt),
+                crate::hir::QuantifierKind::Choose => {
+                    SmtExpr::Var(format!("__choose_{}", params.first().map(|(n, _)| n.clone()).unwrap_or_default()))
+                }
+            }
+        }
         HirExpr::Call(name, _, ty) => {
             // For Phase 5, we treat function calls as opaque values in WP.
             // In the future, we will use uninterpreted functions or inline contracts.
@@ -325,11 +344,22 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
                 BinaryOp::Ge => SmtExpr::Ge(lhs_smt, rhs_smt),
                 BinaryOp::And => SmtExpr::And(lhs_smt, rhs_smt),
                 BinaryOp::Or => SmtExpr::Or(lhs_smt, rhs_smt),
+                BinaryOp::Implies => SmtExpr::Implies(lhs_smt, rhs_smt),
+                BinaryOp::Iff => SmtExpr::Eq(lhs_smt, rhs_smt), // Iff maps to Eq in SMT for booleans
                 _ => SmtExpr::BoolConst(false), // fallback
             }
         }
         HirExpr::ResultOk(inner, _) => SmtExpr::FuncCall("mk_ok".to_string(), vec![hir_to_smt(inner)]),
         HirExpr::ResultErr(inner, _) => SmtExpr::FuncCall("mk_err".to_string(), vec![hir_to_smt(inner)]),
+        HirExpr::Block(block, _) => {
+            if let Some(crate::hir::HirStmt::Expr(e)) = block.statements.last() {
+                hir_to_smt(e)
+            } else if let Some(crate::hir::HirStmt::Return(Some(e))) = block.statements.last() {
+                hir_to_smt(e)
+            } else {
+                SmtExpr::BoolConst(false)
+            }
+        }
         _ => SmtExpr::BoolConst(false), // fallback
     }
 }

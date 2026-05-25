@@ -859,6 +859,32 @@ impl<'a> Parser<'a> {
         self.finish_node(); // STRUCT_DECL
     }
 
+    fn parse_quantifier_expr(&mut self) {
+        self.start_node(SyntaxKind::QUANTIFIER_EXPR);
+        self.advance(); // consume forall / exists / choose
+        
+        while !self.at(SyntaxKind::LBrace) && self.cursor < self.tokens.len() {
+            self.start_node(SyntaxKind::PARAM);
+            self.expect(SyntaxKind::Ident);
+            self.expect(SyntaxKind::Colon);
+            self.parse_type();
+            self.finish_node(); // PARAM
+            if self.at(SyntaxKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        if self.at(SyntaxKind::LBrace) {
+            self.parse_block();
+        } else {
+            self.error("Expected block body for quantifier");
+        }
+        
+        self.finish_node();
+    }
+
     fn parse_primary_expr(&mut self) {
         if self.at(SyntaxKind::Ident) || self.at(SyntaxKind::TyResult) {
             // Peek to see if it's a struct expr: Ident {
@@ -906,6 +932,8 @@ impl<'a> Parser<'a> {
             self.expect(SyntaxKind::RParen);
         } else if self.at(SyntaxKind::KwIf) {
             self.parse_if_expr();
+        } else if self.at(SyntaxKind::KwForall) || self.at(SyntaxKind::KwExists) || self.at(SyntaxKind::KwChoose) {
+            self.parse_quantifier_expr();
         } else if self.at(SyntaxKind::KwMatch) {
             self.parse_match_expr();
         } else if self.at(SyntaxKind::LBracket) {

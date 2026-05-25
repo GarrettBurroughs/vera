@@ -856,6 +856,9 @@ impl<'ctx> CodeGen<'ctx> {
                     Err("Closure must have Func type".into())
                 }
             }
+            HirExpr::Quantifier(_, _, _, _) => {
+                Ok(self.context.i32_type().const_zero().into()) // dummy
+            }
             HirExpr::Error => Err("Cannot compile HirExpr::Error".into()),
         }
     }

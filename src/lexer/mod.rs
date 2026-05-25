@@ -68,6 +68,9 @@ pub enum Token {
     #[token("decreases")] KwDecreases,
     #[token("assert")] KwAssert,
     #[token("assume")] KwAssume,
+    #[token("forall")] KwForall,
+    #[token("exists")] KwExists,
+    #[token("choose")] KwChoose,
 
     // Operators and Punctuation
     #[token("=")] Eq,
@@ -218,7 +221,7 @@ mod tests {
     /// Tests all remaining verification-specific keywords.
     #[test]
     fn test_lex_all_verification_keywords() {
-        let input = "requires ensures assigns invariant decreases assert assume";
+        let input = "requires ensures assigns invariant decreases assert assume forall exists choose";
         let tokens: Vec<_> = Token::lexer(input)
             .filter(|t| t.as_ref().map_or(true, |t| *t != Token::Whitespace))
             .collect();
@@ -229,6 +232,9 @@ mod tests {
         assert_eq!(tokens[4], Ok(Token::KwDecreases));
         assert_eq!(tokens[5], Ok(Token::KwAssert));
         assert_eq!(tokens[6], Ok(Token::KwAssume));
+        assert_eq!(tokens[7], Ok(Token::KwForall));
+        assert_eq!(tokens[8], Ok(Token::KwExists));
+        assert_eq!(tokens[9], Ok(Token::KwChoose));
     }
 
     /// Tests comparison and equality operators, including multi-char tokens.

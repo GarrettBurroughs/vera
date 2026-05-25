@@ -86,12 +86,19 @@ pub enum HirStmt {
 pub enum BinaryOp {
     Add, Sub, Mul, Div, Rem,
     Eq, Neq, Lt, Gt, Le, Ge,
-    And, Or, Assign,
+    And, Or, Implies, Iff, Assign,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnaryOp {
     Neg, Not,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuantifierKind {
+    Forall,
+    Exists,
+    Choose,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +127,7 @@ pub enum HirExpr {
     Deref(Box<HirExpr>, HirType), // inner expr, result type
     Block(HirBlock, HirType),
     Closure(Vec<String>, Box<HirExpr>, Vec<String>, HirType), // params, body, captures, type
+    Quantifier(QuantifierKind, Vec<(String, HirType)>, Box<HirExpr>, HirType), // kind, params, body, type
     Error,
 }
 
@@ -149,6 +157,7 @@ impl HirExpr {
             HirExpr::Deref(_, ty) => ty.clone(),
             HirExpr::Block(_, ty) => ty.clone(),
             HirExpr::Closure(_, _, _, ty) => ty.clone(),
+            HirExpr::Quantifier(_, _, _, ty) => ty.clone(),
             HirExpr::Error => HirType::Error,
         }
     }

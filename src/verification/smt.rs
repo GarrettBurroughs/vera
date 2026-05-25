@@ -42,10 +42,10 @@ pub enum SmtExpr {
     Not(Box<SmtExpr>),
     /// Universal quantifier: `(forall ((var Int)) body)`
     #[allow(dead_code)] // Scaffolded for loop invariant quantifier support (Phase 2)
-    Forall(String, Box<SmtExpr>),
+    Forall(Vec<(String, String)>, Box<SmtExpr>),
     /// Existential quantifier: `(exists ((var Int)) body)`
     #[allow(dead_code)] // Scaffolded for loop invariant quantifier support (Phase 2)
-    Exists(String, Box<SmtExpr>),
+    Exists(Vec<(String, String)>, Box<SmtExpr>),
     /// Custom uninterpreted function call
     FuncCall(String, Vec<SmtExpr>),
 }
@@ -75,18 +75,18 @@ impl SmtExpr {
             SmtExpr::Implies(l, r) => SmtExpr::Implies(Box::new(l.substitute(var_name, replacement)), Box::new(r.substitute(var_name, replacement))),
             SmtExpr::Not(inner) => SmtExpr::Not(Box::new(inner.substitute(var_name, replacement))),
             // Quantifiers: do not substitute the bound variable.
-            SmtExpr::Forall(bound, body) => {
-                if bound == var_name {
-                    self.clone() // bound variable shadows; no substitution inside
-                } else {
-                    SmtExpr::Forall(bound.clone(), Box::new(body.substitute(var_name, replacement)))
-                }
-            }
-            SmtExpr::Exists(bound, body) => {
-                if bound == var_name {
+            SmtExpr::Forall(bounds, body) => {
+                if bounds.iter().any(|(n, _)| n == var_name) {
                     self.clone()
                 } else {
-                    SmtExpr::Exists(bound.clone(), Box::new(body.substitute(var_name, replacement)))
+                    SmtExpr::Forall(bounds.clone(), Box::new(body.substitute(var_name, replacement)))
+                }
+            }
+            SmtExpr::Exists(bounds, body) => {
+                if bounds.iter().any(|(n, _)| n == var_name) {
+                    self.clone()
+                } else {
+                    SmtExpr::Exists(bounds.clone(), Box::new(body.substitute(var_name, replacement)))
                 }
             }
             SmtExpr::FuncCall(name, args) => {
@@ -131,8 +131,14 @@ impl SmtExpr {
             SmtExpr::Or(l, r) => format!("(or {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Implies(l, r) => format!("(=> {} {})", l.to_smtlib2(), r.to_smtlib2()),
             SmtExpr::Not(inner) => format!("(not {})", inner.to_smtlib2()),
-            SmtExpr::Forall(var, body) => format!("(forall (({} Int)) {})", var, body.to_smtlib2()),
-            SmtExpr::Exists(var, body) => format!("(exists (({} Int)) {})", var, body.to_smtlib2()),
+            SmtExpr::Forall(bounds, body) => {
+                let decls = bounds.iter().map(|(n, t)| format!("({} {})", n, t)).collect::<Vec<_>>().join(" ");
+                format!("(forall ({}) {})", decls, body.to_smtlib2())
+            }
+            SmtExpr::Exists(bounds, body) => {
+                let decls = bounds.iter().map(|(n, t)| format!("({} {})", n, t)).collect::<Vec<_>>().join(" ");
+                format!("(exists ({}) {})", decls, body.to_smtlib2())
+            }
             SmtExpr::FuncCall(name, args) => {
                 if args.is_empty() {
                     name.clone()
@@ -170,6 +176,8 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
 
     smt_script.push_str(&format!("(assert {})\n", expr.to_smtlib2()));
     smt_script.push_str("(check-sat)\n");
+    
+    println!("SMT QUERY:\n{}", smt_script);
 
     // Write to a temporary file, or use stdin.
     // For simplicity, we can pass it via stdin to `z3 -in`.
@@ -212,12 +220,12 @@ pub(crate) fn collect_vars(expr: &SmtExpr, vars: &mut BTreeSet<String>) {
             collect_vars(r, vars);
         }
         SmtExpr::Not(inner) => collect_vars(inner, vars),
-        SmtExpr::Forall(bound, body) | SmtExpr::Exists(bound, body) => {
-            // The bound variable is declared by the quantifier itself; don't add it as a free var.
+        SmtExpr::Forall(bounds, body) | SmtExpr::Exists(bounds, body) => {
+            // The bound variables are declared by the quantifier itself; don't add them as free vars.
             let mut inner_vars = vars.clone();
             collect_vars(body, &mut inner_vars);
             for v in inner_vars {
-                if &v != bound {
+                if !bounds.iter().any(|(n, _)| n == &v) {
                     vars.insert(v);
                 }
             }
