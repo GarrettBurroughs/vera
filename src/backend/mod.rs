@@ -318,6 +318,10 @@ impl<'ctx> CodeGen<'ctx> {
                     return Err("continue statement outside of loop".into());
                 }
             }
+            HirStmt::GhostBlock(_) => {
+                // Ghost blocks are purely for verification and are completely erased during compilation
+                return Ok(());
+            }
             HirStmt::Assert(_) | HirStmt::Assume(_) => {
                 // Verification statements are erased during code generation.
             }

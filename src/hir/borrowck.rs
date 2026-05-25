@@ -91,6 +91,9 @@ impl BorrowChecker {
                 ctx.exit_scope();
             }
             HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
+            HirStmt::GhostBlock(body) => {
+                self.check_block(body, ctx);
+            }
         }
     }
 

@@ -737,6 +737,10 @@ impl LoweringContext {
                 let expr = assume_stmt.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
                 HirStmt::Assume(expr)
             }
+            ast::Stmt::GhostBlock(ghost_block) => {
+                let block = ghost_block.block().map(|b| self.lower_block(&b)).unwrap_or_else(|| HirBlock { statements: Vec::new() });
+                HirStmt::GhostBlock(block)
+            }
             ast::Stmt::WhileStmt(while_stmt) => {
                 let cond = while_stmt.condition().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::Error);
                 if cond.ty() != HirType::Error && cond.ty() != HirType::Bool {
@@ -1548,6 +1552,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
             HirStmt::Expr(e) | HirStmt::Assert(e) | HirStmt::Assume(e) => get_captures(e, &mut new_bound, captures),
             HirStmt::Return(Some(e)) => get_captures(e, &mut new_bound, captures),
             HirStmt::Return(None) | HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
+            HirStmt::GhostBlock(ghost_body) => get_captures_block(ghost_body, &mut new_bound, captures),
             HirStmt::While(cond, body, invs, decreases) => {
                 get_captures(cond, &mut new_bound, captures);
                 for inv in invs {

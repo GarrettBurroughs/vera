@@ -77,6 +77,7 @@ ast_node!(TryExpr, SyntaxKind::TRY_EXPR);
 ast_node!(RefExpr, SyntaxKind::REF_EXPR);
 ast_node!(DerefExpr, SyntaxKind::DEREF_EXPR);
 ast_node!(UnsafeBlock, SyntaxKind::UNSAFE_BLOCK);
+ast_node!(GhostBlock, SyntaxKind::GHOST_BLOCK);
 ast_node!(ClosureExpr, SyntaxKind::CLOSURE_EXPR);
 ast_node!(GenericInstExpr, SyntaxKind::GENERIC_INST_EXPR);
 ast_node!(QuantifierExpr, SyntaxKind::QUANTIFIER_EXPR);
@@ -119,6 +120,7 @@ pub enum Stmt {
     AssertStmt(AssertStmt),
     AssumeStmt(AssumeStmt),
     ForStmt(ForStmt),
+    GhostBlock(GhostBlock),
 }
 
 impl Stmt {
@@ -134,6 +136,7 @@ impl Stmt {
             SyntaxKind::ASSERT_STMT => AssertStmt::cast(node).map(Stmt::AssertStmt),
             SyntaxKind::ASSUME_STMT => AssumeStmt::cast(node).map(Stmt::AssumeStmt),
             SyntaxKind::FOR_STMT => ForStmt::cast(node).map(Stmt::ForStmt),
+            SyntaxKind::GHOST_BLOCK => GhostBlock::cast(node).map(Stmt::GhostBlock),
             _ => None,
         }
     }
@@ -792,6 +795,12 @@ impl MatchArm {
         self.syntax().children().find_map(Expr::cast)
     }
     pub fn body(&self) -> Option<BlockExpr> {
+        self.syntax().children().find_map(BlockExpr::cast)
+    }
+}
+
+impl GhostBlock {
+    pub fn block(&self) -> Option<BlockExpr> {
         self.syntax().children().find_map(BlockExpr::cast)
     }
 }

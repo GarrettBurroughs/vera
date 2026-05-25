@@ -79,6 +79,7 @@ pub enum HirStmt {
     For(String, HirExpr, HirBlock), // item_name, iterable, body
     Break,
     Continue,
+    GhostBlock(HirBlock),
     Error,
 }
 

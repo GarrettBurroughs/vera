@@ -61,6 +61,7 @@ pub enum SyntaxKind {
     FIELD_EXPR,
     WHILE_STMT,
     UNSAFE_BLOCK,
+    GHOST_BLOCK,
     FOR_STMT,
     BREAK_STMT,
     CONTINUE_STMT,

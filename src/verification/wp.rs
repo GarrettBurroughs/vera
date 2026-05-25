@@ -146,6 +146,13 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
             }
         }
         HirStmt::Error => post,
+        HirStmt::GhostBlock(block) => {
+            let mut ghost_post = post;
+            for s in block.statements.iter().rev() {
+                ghost_post = compute_wp(s, ghost_post, ensures_wp);
+            }
+            ghost_post
+        }
     }
 }
 
@@ -367,7 +374,7 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
 fn collect_modified_vars_stmt(stmt: &HirStmt, vars: &mut std::collections::HashSet<String>) {
     match stmt {
         HirStmt::Expr(expr) => collect_modified_vars_expr(expr, vars),
-        HirStmt::While(_, body, _, _) | HirStmt::For(_, _, body) => {
+        HirStmt::While(_, body, _, _) | HirStmt::For(_, _, body) | HirStmt::GhostBlock(body) => {
             for s in &body.statements {
                 collect_modified_vars_stmt(s, vars);
             }

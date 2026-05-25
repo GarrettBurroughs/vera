@@ -437,9 +437,22 @@ impl<'a> Parser<'a> {
             self.parse_expr();
             self.expect(SyntaxKind::Semi);
             self.finish_node();
+        } else if self.at(SyntaxKind::KwGhost) {
+            self.parse_ghost_block();
         } else {
             self.parse_expr_stmt();
         }
+    }
+    
+    fn parse_ghost_block(&mut self) {
+        self.start_node(SyntaxKind::GHOST_BLOCK);
+        self.advance(); // consume 'ghost'
+        if self.at(SyntaxKind::LBrace) {
+            self.parse_block();
+        } else {
+            self.error("Expected block body for ghost code");
+        }
+        self.finish_node();
     }
 
     fn parse_while_stmt(&mut self) {

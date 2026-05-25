@@ -1,0 +1,11 @@
+// verify-fail
+
+func main() {
+    var x: i32 = 0;
+    
+    ghost {
+        var g: i32 = x;
+        g = g + 2;
+        assert g == 1; // Should fail verification
+    }
+}
