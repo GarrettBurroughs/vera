@@ -160,6 +160,26 @@ impl QueryContext {
         best_match
     }
 
+    /// Query: find the type span for the symbol at the given byte offset.
+    pub fn query_hover(&mut self, file_id: FileId, byte_offset: u32) -> Option<(crate::hir::Span, crate::hir::HirType)> {
+        let (hir, _) = self.query_hir_program();
+        let mut best_match = None;
+        let mut best_len = u32::MAX;
+        
+        if let Some(types) = hir.type_map.get(&file_id) {
+            for (span, ty) in types {
+                if span.start <= byte_offset && span.end >= byte_offset {
+                    let len = span.end - span.start;
+                    if len < best_len {
+                        best_match = Some((*span, ty.clone()));
+                        best_len = len;
+                    }
+                }
+            }
+        }
+        best_match
+    }
+
     /// Query: borrow-check the program (cached).
     ///
     /// Rebuilds the HIR first if needed.

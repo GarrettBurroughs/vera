@@ -5,6 +5,7 @@ use lsp_types::{
     DidCloseTextDocumentParams, Diagnostic, DiagnosticSeverity, Range, Position,
     PublishDiagnosticsParams, InlayHint, InlayHintLabel, InlayHintParams,
     GotoDefinitionParams, Location, GotoDefinitionResponse, OneOf,
+    HoverProviderCapability, HoverParams, Hover, HoverContents, MarkedString,
 };
 use lsp_server::{Connection, Message, Request, RequestId, Response};
 use tracing::info;
@@ -20,10 +21,11 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
                 open_close: Some(true),
                 change: Some(TextDocumentSyncKind::FULL),
                 ..Default::default()
-            },
+            }
         )),
         inlay_hint_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         ..Default::default()
     })
     .unwrap();
@@ -143,6 +145,46 @@ fn main_loop(
                                         result = serde_json::to_value(location).unwrap();
                                     }
                                 }
+                            }
+                        }
+                    }
+                    
+                    let resp = Response { id: req.id, result: Some(result), error: None };
+                    connection.sender.send(Message::Response(resp)).unwrap();
+                } else if req.method == "textDocument/hover" {
+                    let params: HoverParams = serde_json::from_value(req.params).unwrap();
+                    let uri = params.text_document_position_params.text_document.uri;
+                    let uri_str = uri.to_string();
+                    let path_str = if uri_str.starts_with("file://") {
+                        uri_str[7..].to_string()
+                    } else {
+                        uri_str.clone()
+                    };
+                    let path = std::path::PathBuf::from(path_str);
+                    
+                    let mut result = serde_json::Value::Null;
+                    
+                    if let Some(&file_id) = qctx.workspace().files.iter().find_map(|(id, f)| {
+                        if f.path == path { Some(id) } else { None }
+                    }) {
+                        let source = qctx.workspace().files.get(&file_id).unwrap().source.clone();
+                        let pos = params.text_document_position_params.position;
+                        if let Some(byte_offset) = crate::diagnostics::position_to_byte_offset(&source, pos.line, pos.character) {
+                            if let Some((span, ty)) = qctx.query_hover(file_id, byte_offset) {
+                                let (start_line, start_col) = crate::diagnostics::byte_offset_to_position(&source, span.start);
+                                let (end_line, end_col) = crate::diagnostics::byte_offset_to_position(&source, span.end);
+                                
+                                let hover = Hover {
+                                    contents: HoverContents::Scalar(MarkedString::LanguageString(lsp_types::LanguageString {
+                                        language: "vera".to_string(),
+                                        value: format!("{}", ty),
+                                    })),
+                                    range: Some(Range {
+                                        start: Position { line: start_line, character: start_col },
+                                        end: Position { line: end_line, character: end_col },
+                                    }),
+                                };
+                                result = serde_json::to_value(hover).unwrap();
                             }
                         }
                     }

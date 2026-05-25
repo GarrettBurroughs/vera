@@ -68,6 +68,34 @@ impl PartialEq for HirType {
 }
 impl Eq for HirType {}
 
+impl std::fmt::Display for HirType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HirType::I32 => write!(f, "i32"),
+            HirType::Bool => write!(f, "bool"),
+            HirType::Void => write!(f, "void"),
+            HirType::Struct(name) => write!(f, "{}", name),
+            HirType::Enum(name) => write!(f, "{}", name),
+            HirType::Variant(name) => write!(f, "{}", name),
+            HirType::Array(ty, size) => write!(f, "[{}; {}]", ty, size),
+            HirType::Slice(ty) => write!(f, "[{}]", ty),
+            HirType::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            HirType::Ptr(ty, is_mut) => write!(f, "*{}{}", if *is_mut { "mut " } else { "const " }, ty),
+            HirType::Ref(ty, is_mut) => write!(f, "&{}{}", if *is_mut { "mut " } else { "" }, ty),
+            HirType::Func(params, ret) => {
+                write!(f, "fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, ") -> {}", ret)
+            }
+            HirType::Refinement(base, _) => write!(f, "{}", base),
+            HirType::Error => write!(f, "{{error}}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // type_aliases and enums fields used in codegen via pattern matching
 pub struct HirProgram {
@@ -77,6 +105,7 @@ pub struct HirProgram {
     pub variants: std::collections::BTreeMap<String, Vec<(String, Vec<HirType>)>>,
     pub functions: Vec<HirFunc>,
     pub definition_map: std::collections::BTreeMap<crate::workspace::FileId, Vec<(Span, Span)>>,
+    pub type_map: std::collections::BTreeMap<crate::workspace::FileId, Vec<(Span, HirType)>>,
 }
 
 impl HirProgram {
@@ -88,6 +117,7 @@ impl HirProgram {
             variants: std::collections::BTreeMap::new(),
             functions: Vec::new(),
             definition_map: std::collections::BTreeMap::new(),
+            type_map: std::collections::BTreeMap::new(),
         }
     }
 }

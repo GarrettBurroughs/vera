@@ -199,6 +199,7 @@ pub struct LoweringContext {
     pub resolver: crate::hir::name_resolution::NameResolver,
     pub current_file: FileId,
     pub definition_map: std::collections::BTreeMap<crate::workspace::FileId, Vec<(crate::hir::Span, crate::hir::Span)>>,
+    pub type_map: std::collections::BTreeMap<crate::workspace::FileId, Vec<(crate::hir::Span, HirType)>>,
 }
 
 impl LoweringContext {
@@ -226,6 +227,7 @@ impl LoweringContext {
             },
             current_file: 0,
             definition_map: std::collections::BTreeMap::new(),
+            type_map: std::collections::BTreeMap::new(),
         }
     }
 
@@ -632,6 +634,7 @@ impl LoweringContext {
             variants: self.variants.clone(),
             functions,
             definition_map: self.definition_map.clone(),
+            type_map: self.type_map.clone(),
         }
     }
 
@@ -931,6 +934,10 @@ impl LoweringContext {
 
                 let sym_id = self.declare_var(name.clone(), declared_ty.clone(), is_const, name_span);
 
+                if !name_span.is_unknown() && declared_ty != HirType::Error {
+                    self.type_map.entry(self.current_file).or_default().push((name_span, declared_ty.clone()));
+                }
+
                 HirStmt::new(HirStmtKind::Let(name, sym_id, is_const, declared_ty, initializer), span)
             }
             ast::Stmt::ExprStmt(expr_stmt) => {
@@ -1026,6 +1033,14 @@ impl LoweringContext {
     }
 
     fn lower_expr(&mut self, expr: &ast::Expr) -> HirExpr {
+        let res = self.lower_expr_inner(expr);
+        if !res.span.is_unknown() && res.ty() != HirType::Error {
+            self.type_map.entry(self.current_file).or_default().push((res.span, res.ty().clone()));
+        }
+        res
+    }
+
+    fn lower_expr_inner(&mut self, expr: &ast::Expr) -> HirExpr {
         let span = self.expr_span(expr);
         match expr {
             ast::Expr::Literal(lit) => {
@@ -1116,13 +1131,18 @@ impl LoweringContext {
                             direct_name = name.clone();
                         } else {
                             let global_name = self.resolve_path(&[name.clone()]);
-                            if self.functions.contains_key(&global_name) {
+                            if let Some(func_info) = self.functions.get(&global_name).cloned() {
                                 is_direct = true;
                                 direct_name = global_name.clone();
                                 let def_span = self.resolver.get_span(&global_name);
                                 let use_span = self.node_span(name_ref);
                                 if !use_span.is_unknown() && !def_span.is_unknown() {
                                     self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+                                }
+                                if !use_span.is_unknown() {
+                                    let params: Vec<HirType> = func_info.0.iter().map(|(_, t)| t.clone()).collect();
+                                    let ty = HirType::Func(params, Box::new(func_info.1));
+                                    self.type_map.entry(self.current_file).or_default().push((use_span, ty));
                                 }
                             } else if self.generic_templates.funcs.contains_key(&global_name) {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name), span: self.node_span(call_expr) });
@@ -1134,13 +1154,18 @@ impl LoweringContext {
                             let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
                             
                             let global_name = self.resolve_path(&[mod_name.clone(), field_name.clone()]);
-                            if self.functions.contains_key(&global_name) {
+                            if let Some(func_info) = self.functions.get(&global_name).cloned() {
                                 is_direct = true;
                                 direct_name = global_name.clone();
                                 let def_span = self.resolver.get_span(&global_name);
                                 let use_span = self.node_span(field_expr);
                                 if !use_span.is_unknown() && !def_span.is_unknown() {
                                     self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+                                }
+                                if !use_span.is_unknown() {
+                                    let params: Vec<HirType> = func_info.0.iter().map(|(_, t)| t.clone()).collect();
+                                    let ty = HirType::Func(params, Box::new(func_info.1));
+                                    self.type_map.entry(self.current_file).or_default().push((use_span, ty));
                                 }
                             } else if self.generic_templates.funcs.contains_key(&global_name) {
                                 self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", global_name), span: self.node_span(call_expr) });
@@ -1157,11 +1182,18 @@ impl LoweringContext {
                                     }
                                     let mono_name = self.request_monomorphize_func(&global_name, args);
                                     is_direct = true;
-                                    direct_name = mono_name;
+                                    direct_name = mono_name.clone();
                                     let def_span = self.resolver.get_span(&global_name);
                                     let use_span = self.node_span(&name_ref);
                                     if !use_span.is_unknown() && !def_span.is_unknown() {
                                         self.definition_map.entry(self.current_file).or_default().push((use_span, def_span));
+                                    }
+                                    if let Some(func_info) = self.functions.get(&mono_name).cloned() {
+                                        if !use_span.is_unknown() {
+                                            let params: Vec<HirType> = func_info.0.iter().map(|(_, t)| t.clone()).collect();
+                                            let ty = HirType::Func(params, Box::new(func_info.1));
+                                            self.type_map.entry(self.current_file).or_default().push((use_span, ty));
+                                        }
                                     }
                                 }
                             } else {

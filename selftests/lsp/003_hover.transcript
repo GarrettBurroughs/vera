@@ -1,0 +1,12 @@
+SEND: {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+EXPECT: {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"definitionProvider":true,"hoverProvider":true,"inlayHintProvider":true,"textDocumentSync":{"change":1,"openClose":true}}}}
+SEND: {"jsonrpc":"2.0","method":"initialized","params":{}}
+SEND: {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///home/gburroughs/dev/rust/verify/test_hover.vera","languageId":"vera","version":1,"text":"func helper(x: i32): bool {\n    return x == 42;\n}\n\nfunc main(): i32 {\n    var is_answer: bool = helper(42);\n    return 0;\n}"}}}
+EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"file:///home/gburroughs/dev/rust/verify/test_hover.vera"}}
+SEND: {"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///home/gburroughs/dev/rust/verify/test_hover.vera"},"position":{"line":5,"character":28}}}
+EXPECT: {"id":2,"jsonrpc":"2.0","result":{"contents":{"language":"vera","value":"fn(i32) -> bool"},"range":{"end":{"character":32,"line":5},"start":{"character":26,"line":5}}}}
+SEND: {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///home/gburroughs/dev/rust/verify/test_hover.vera"},"position":{"line":5,"character":12}}}
+EXPECT: {"id":3,"jsonrpc":"2.0","result":{"contents":{"language":"vera","value":"bool"},"range":{"end":{"character":17,"line":5},"start":{"character":8,"line":5}}}}
+SEND: {"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}
+EXPECT: {"id":4,"jsonrpc":"2.0","result":null}
+SEND: {"jsonrpc":"2.0","method":"exit","params":null}
