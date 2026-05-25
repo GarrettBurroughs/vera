@@ -169,12 +169,16 @@ fn main_loop(
                                         if let Some(res) = verification_status.get(&func_name) {
                                             let (line, col) = crate::diagnostics::byte_offset_to_position(&source, span.start);
                                             let status_text = match res {
-                                                Ok(_) => "✓ verified",
-                                                Err(_) => "✗ failed",
+                                                Ok(_) => "✓ verified".to_string(),
+                                                Err(crate::verification::VerificationError::ProofFailed { counterexample: Some(model), .. }) => {
+                                                    let vars: Vec<_> = model.iter().map(|(k, v)| format!("{} = {}", k, v)).collect();
+                                                    format!("✗ failed [Counterexample: {}]", vars.join(", "))
+                                                },
+                                                Err(_) => "✗ failed".to_string(),
                                             };
                                             hints.push(InlayHint {
                                                 position: Position { line, character: col },
-                                                label: InlayHintLabel::String(status_text.to_string()),
+                                                label: InlayHintLabel::String(status_text),
                                                 kind: None,
                                                 text_edits: None,
                                                 tooltip: None,

@@ -1,0 +1,11 @@
+SEND: {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+EXPECT: {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"definitionProvider":true,"hoverProvider":true,"inlayHintProvider":true,"textDocumentSync":{"change":1,"openClose":true}}}}
+SEND: {"jsonrpc":"2.0","method":"initialized","params":{}}
+SEND: {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test_ce.vera","languageId":"vera","version":1,"text":"func helper(x: i32): i32 {\n    assert x == 42;\n    return x;\n}"}}}
+EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"$WORKSPACE_ROOT/test_ce.vera"}}
+EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[{"message":"Verification failed: Function 'test_ce::helper' failed verification.","range":{"end":{"character":1,"line":3},"start":{"character":0,"line":0}},"severity":1,"source":"vera-verify"}],"uri":"$WORKSPACE_ROOT/test_ce.vera"}}
+SEND: {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test_ce.vera"},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":1}}}}
+EXPECT: {"id":2,"jsonrpc":"2.0","result":[{"label":"✗ failed [Counterexample: x_1 = 43]","paddingLeft":true,"paddingRight":true,"position":{"character":0,"line":0}}]}
+SEND: {"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}
+EXPECT: {"id":3,"jsonrpc":"2.0","result":null}
+SEND: {"jsonrpc":"2.0","method":"exit","params":null}

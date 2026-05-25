@@ -13,7 +13,7 @@ pub enum VerificationError {
 
     #[error("Verification failed: {message}")]
     #[diagnostic(code(vera::proof_failed))]
-    ProofFailed { message: String, #[doc(hidden)] span: Span },
+    ProofFailed { message: String, #[doc(hidden)] span: Span, counterexample: Option<std::collections::BTreeMap<String, String>> },
 
     #[error("Vacuous precondition: {message}")]
     #[diagnostic(code(vera::vacuous_precondition))]

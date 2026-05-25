@@ -38,7 +38,7 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
 
     // 3.7. Precondition Vacuity Checking
     // Disallow contradictory preconditions that make the function trivially verifiable
-    if !check_sat(&precondition, func.span)? {
+    if check_sat(&precondition, func.span)?.is_none() {
         return Err(VerificationError::VacuousPrecondition { message: format!("Function '{}' has vacuous (unsatisfiable) preconditions.", func.name), span: func.span });
     }
 
@@ -50,8 +50,8 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
     // 6. Invoke Z3
     let is_sat = check_sat(&query, func.span)?;
 
-    if is_sat {
-        Err(VerificationError::ProofFailed { message: format!("Function '{}' failed verification.", func.name), span: func.span })
+    if let Some(model) = is_sat {
+        Err(VerificationError::ProofFailed { message: format!("Function '{}' failed verification.", func.name), span: func.span, counterexample: Some(model) })
     } else {
         Ok(()) // Unsat means valid
     }

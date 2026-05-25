@@ -153,8 +153,9 @@ impl SmtExpr {
 }
 
 /// Checks satisfiability of the given SMT expression by shelling out to Z3.
-/// Returns Ok(true) if SAT, Ok(false) if UNSAT.
-pub fn check_sat(expr: &SmtExpr, span: Span) -> Result<bool, VerificationError> {
+/// Returns Ok(None) if UNSAT (Valid).
+/// Returns Ok(Some(model)) if SAT (Invalid / Counterexample found).
+pub fn check_sat(expr: &SmtExpr, span: Span) -> Result<Option<std::collections::BTreeMap<String, String>>, VerificationError> {
     // Collect variables to declare them; use BTreeSet for deterministic ordering.
     let mut vars = BTreeSet::new();
     collect_vars(expr, &mut vars);
@@ -183,6 +184,7 @@ pub fn check_sat(expr: &SmtExpr, span: Span) -> Result<bool, VerificationError> 
     tracing::trace!("SMT QUERY:\n{}", smt_script);
 
     smt_script.push_str("(check-sat)\n");
+    smt_script.push_str("(get-model)\n");
 
     // Write to a temporary file, or use stdin.
     // For simplicity, we can pass it via stdin to `z3 -in`.
@@ -208,9 +210,32 @@ pub fn check_sat(expr: &SmtExpr, span: Span) -> Result<bool, VerificationError> 
     let stdout = String::from_utf8_lossy(&output.stdout);
     
     if stdout.contains("unsat") {
-        Ok(false)
+        Ok(None)
     } else if stdout.contains("sat") {
-        Ok(true)
+        let mut model = std::collections::BTreeMap::new();
+        if let Some(_) = stdout.find("sat") {
+            let lines: Vec<&str> = stdout.lines().collect();
+            for i in 0..lines.len() {
+                let line = lines[i].trim();
+                if line.starts_with("(define-fun ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 && parts[2] == "()" {
+                        let var_name = parts[1].to_string();
+                        if var_name == "separated" || var_name == "valid" || var_name == "valid_read" || 
+                           var_name == "mk_ok" || var_name == "mk_err" || var_name == "unwrap_ok" || 
+                           var_name == "unwrap_err" || var_name == "is_ok" {
+                               continue;
+                        }
+                        if i + 1 < lines.len() {
+                            let val_line = lines[i+1].trim();
+                            let value = val_line.trim_end_matches(')').to_string();
+                            model.insert(var_name, value);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Some(model))
     } else {
         Err(VerificationError::Z3Error { message: format!("Unexpected Z3 output: {}", stdout), span })
     }
