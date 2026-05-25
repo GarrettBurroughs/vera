@@ -61,6 +61,7 @@ pub struct HirFunc {
     pub body: HirBlock,
     pub requires: Vec<HirExpr>,
     pub ensures: Vec<HirExpr>,
+    pub assigns: Vec<HirExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,8 +76,8 @@ pub enum HirStmt {
     Return(Option<HirExpr>),
     Assert(HirExpr),
     Assume(HirExpr),
-    While(HirExpr, HirBlock, Vec<HirExpr>, Option<HirExpr>), // condition, body, invariants, decreases
-    For(String, HirExpr, HirBlock), // item_name, iterable, body
+    While(HirExpr, HirBlock, Vec<HirExpr>, Option<HirExpr>, Vec<HirExpr>), // condition, body, invariants, decreases, assigns
+    For(String, HirExpr, HirBlock, Vec<HirExpr>), // item_name, iterable, body, assigns
     Break,
     Continue,
     GhostBlock(HirBlock),

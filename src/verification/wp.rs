@@ -15,7 +15,7 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
 
     // 2. Compute WP backwards through statements
     for stmt in func.body.statements.iter().rev() {
-        current_wp = compute_wp(stmt, current_wp, &ensures_wp);
+        current_wp = compute_wp(stmt, current_wp, &ensures_wp, &func.assigns);
     }
 
     // 3. Add requires clauses as preconditions
@@ -54,16 +54,16 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
     }
 }
 
-fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
+fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[HirExpr]) -> SmtExpr {
     match stmt {
         HirStmt::Assert(expr) => {
-            wp_eval_expr(expr, "__dummy_assert", SmtExpr::And(Box::new(SmtExpr::Var("__dummy_assert".into())), Box::new(post)), ensures_wp)
+            wp_eval_expr(expr, "__dummy_assert", SmtExpr::And(Box::new(SmtExpr::Var("__dummy_assert".into())), Box::new(post)), ensures_wp, assigns)
         }
         HirStmt::Assume(expr) => {
-            wp_eval_expr(expr, "__dummy_assume", SmtExpr::Implies(Box::new(SmtExpr::Var("__dummy_assume".into())), Box::new(post)), ensures_wp)
+            wp_eval_expr(expr, "__dummy_assume", SmtExpr::Implies(Box::new(SmtExpr::Var("__dummy_assume".into())), Box::new(post)), ensures_wp, assigns)
         }
         HirStmt::Let(name, _, ty, init) => {
-            let mut post_sub = wp_eval_expr(init, name, post, ensures_wp);
+            let mut post_sub = wp_eval_expr(init, name, post, ensures_wp, assigns);
             if let HirType::Refinement(_, cond) = ty {
                 let cond_smt = hir_to_smt(cond).substitute("self", &SmtExpr::Var(name.clone()));
                 post_sub = SmtExpr::And(Box::new(cond_smt), Box::new(post_sub));
@@ -71,18 +71,31 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
             post_sub
         }
         HirStmt::Expr(expr) => {
-            if let HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = expr
-                && let HirExpr::VarRef(name, ty) = lhs.as_ref() {
-                    let mut post_sub = wp_eval_expr(rhs, name, post, ensures_wp);
+            if let HirExpr::BinaryOp(BinaryOp::Assign, lhs, rhs, _) = expr {
+                if let HirExpr::VarRef(name, ty) = lhs.as_ref() {
+                    let mut post_sub = wp_eval_expr(rhs, name, post, ensures_wp, assigns);
                     if let HirType::Refinement(_, cond) = ty {
                         let cond_smt = hir_to_smt(cond).substitute("self", &SmtExpr::Var(name.clone()));
                         post_sub = SmtExpr::And(Box::new(cond_smt), Box::new(post_sub));
                     }
                     return post_sub;
+                } else if let HirExpr::Deref(ptr, _) = lhs.as_ref() {
+                    let mut frame_cond = SmtExpr::BoolConst(false);
+                    for a in assigns {
+                        if let HirExpr::Deref(a_ptr, _) = a {
+                            frame_cond = SmtExpr::Or(Box::new(frame_cond), Box::new(SmtExpr::Eq(Box::new(hir_to_smt(ptr)), Box::new(hir_to_smt(a_ptr)))));
+                        }
+                    }
+                    if frame_cond.to_smtlib2() == "false" {
+                        // Empty assigns clause or no derefs in assigns
+                    }
+                    let eval_rhs = wp_eval_expr(rhs, "__dummy_rhs", post, ensures_wp, assigns);
+                    return SmtExpr::And(Box::new(frame_cond), Box::new(eval_rhs));
                 }
-            wp_eval_expr(expr, "__dummy_expr", post, ensures_wp)
+            }
+            wp_eval_expr(expr, "__dummy_expr", post, ensures_wp, assigns)
         }
-        HirStmt::While(cond, body, invariants, decreases) => {
+        HirStmt::While(cond, body, invariants, decreases, loop_assigns) => {
             let mut i_expr = SmtExpr::BoolConst(true);
             for inv in invariants {
                 i_expr = SmtExpr::And(Box::new(i_expr), Box::new(hir_to_smt(inv)));
@@ -97,16 +110,15 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
             
             // compute_block_wp backwards
             let mut body_wp = i_expr.clone();
+            for s in body.statements.iter().rev() {
+                body_wp = compute_wp(s, body_wp, ensures_wp, loop_assigns);
+            }
             
             if let Some(dec) = decreases {
                 let d_expr = hir_to_smt(dec);
                 let d0_var = SmtExpr::Var("___d0".into());
                 let dec_cond = SmtExpr::FuncCall("<".into(), vec![d_expr.clone(), d0_var.clone()]);
                 body_wp = SmtExpr::And(Box::new(body_wp), Box::new(dec_cond));
-            }
-            
-            for s in body.statements.iter().rev() {
-                body_wp = compute_wp(s, body_wp, ensures_wp);
             }
             
             if let Some(dec) = decreases {
@@ -135,12 +147,12 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
             
             SmtExpr::And(Box::new(i_expr), Box::new(quantified_body))
         }
-        HirStmt::For(_, _, _) => post,
+        HirStmt::For(_, _, _, _) => post,
         HirStmt::Break => post,
         HirStmt::Continue => post,
         HirStmt::Return(opt_expr) => {
             if let Some(expr) = opt_expr {
-                wp_eval_expr(expr, "result", ensures_wp.clone(), ensures_wp)
+                wp_eval_expr(expr, "result", ensures_wp.clone(), ensures_wp, assigns)
             } else {
                 ensures_wp.clone()
             }
@@ -149,15 +161,22 @@ fn compute_wp(stmt: &HirStmt, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
         HirStmt::GhostBlock(block) => {
             let mut ghost_post = post;
             for s in block.statements.iter().rev() {
-                ghost_post = compute_wp(s, ghost_post, ensures_wp);
+                ghost_post = compute_wp(s, ghost_post, ensures_wp, assigns);
             }
             ghost_post
         }
     }
 }
 
-fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtExpr) -> SmtExpr {
+fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtExpr, assigns: &[HirExpr]) -> SmtExpr {
     match expr {
+        HirExpr::Block(block, _) => {
+            let mut block_wp = post;
+            for s in block.statements.iter().rev() {
+                block_wp = compute_wp(s, block_wp, ensures_wp, assigns);
+            }
+            block_wp
+        }
         HirExpr::Try(inner, _) => {
             let tmp_name = format!("__try_tmp_{}", var_name);
             let tmp_var = SmtExpr::Var(tmp_name.clone());
@@ -174,7 +193,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
                 Box::new(SmtExpr::Implies(Box::new(SmtExpr::Not(Box::new(is_ok))), Box::new(err_branch)))
             );
             
-            wp_eval_expr(inner, &tmp_name, branches, ensures_wp)
+            wp_eval_expr(inner, &tmp_name, branches, ensures_wp, assigns)
         }
         HirExpr::Match(cond, arms, _) => {
             let tmp_cond = format!("__match_cond_{}", var_name);
@@ -183,7 +202,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             let mut final_wp = SmtExpr::BoolConst(true);
             for (pat, arm_expr) in arms {
                 let (arm_cond, bindings) = pattern_to_smt(pat, &cond_var);
-                let mut arm_post = wp_eval_expr(arm_expr, var_name, post.clone(), ensures_wp);
+                let mut arm_post = wp_eval_expr(arm_expr, var_name, post.clone(), ensures_wp, assigns);
                 for (b_name, b_val) in bindings {
                     arm_post = arm_post.substitute(&b_name, &b_val);
                 }
@@ -193,21 +212,43 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
                 );
             }
             
-            wp_eval_expr(cond, &tmp_cond, final_wp, ensures_wp)
+            wp_eval_expr(cond, &tmp_cond, final_wp, ensures_wp, assigns)
+        }
+        HirExpr::If(cond, thn, els, _) => {
+            let mut thn_wp = post.clone();
+            for s in thn.statements.iter().rev() {
+                thn_wp = compute_wp(s, thn_wp, ensures_wp, assigns);
+            }
+            let mut els_wp = post;
+            if let Some(e) = els {
+                for s in e.statements.iter().rev() {
+                    els_wp = compute_wp(s, els_wp, ensures_wp, assigns);
+                }
+            }
+            
+            let tmp_cond = format!("__if_cond_{}", var_name);
+            let cond_var = SmtExpr::Var(tmp_cond.clone());
+            
+            let ite_wp = SmtExpr::And(
+                Box::new(SmtExpr::Implies(Box::new(cond_var.clone()), Box::new(thn_wp))),
+                Box::new(SmtExpr::Implies(Box::new(SmtExpr::Not(Box::new(cond_var))), Box::new(els_wp)))
+            );
+            
+            wp_eval_expr(cond, &tmp_cond, ite_wp, ensures_wp, assigns)
         }
         HirExpr::ResultOk(inner, _) => {
             let tmp_name = format!("__ok_{}", var_name);
             let tmp_var = SmtExpr::Var(tmp_name.clone());
             let mk_ok = SmtExpr::FuncCall("mk_ok".into(), vec![tmp_var]);
             let post_sub = post.substitute(var_name, &mk_ok);
-            wp_eval_expr(inner, &tmp_name, post_sub, ensures_wp)
+            wp_eval_expr(inner, &tmp_name, post_sub, ensures_wp, assigns)
         }
         HirExpr::ResultErr(inner, _) => {
             let tmp_name = format!("__err_{}", var_name);
             let tmp_var = SmtExpr::Var(tmp_name.clone());
             let mk_err = SmtExpr::FuncCall("mk_err".into(), vec![tmp_var]);
             let post_sub = post.substitute(var_name, &mk_err);
-            wp_eval_expr(inner, &tmp_name, post_sub, ensures_wp)
+            wp_eval_expr(inner, &tmp_name, post_sub, ensures_wp, assigns)
         }
         HirExpr::VariantConstructor(_, case, args, _) => {
             if case == "Some" && args.len() == 1 {
@@ -215,7 +256,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
                 let tmp_var = SmtExpr::Var(tmp_name.clone());
                 let mk_ok = SmtExpr::FuncCall("mk_ok".into(), vec![tmp_var]);
                 let post_sub = post.substitute(var_name, &mk_ok);
-                wp_eval_expr(&args[0], &tmp_name, post_sub, ensures_wp)
+                wp_eval_expr(&args[0], &tmp_name, post_sub, ensures_wp, assigns)
             } else if case == "None" {
                 let mk_err = SmtExpr::FuncCall("mk_err".into(), vec![SmtExpr::IntConst(0)]);
                 post.substitute(var_name, &mk_err)
@@ -244,8 +285,8 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             };
             
             let p_sub = post.substitute(var_name, &op_smt);
-            let wp_r = wp_eval_expr(r, &tmp_r, p_sub, ensures_wp);
-            wp_eval_expr(l, &tmp_l, wp_r, ensures_wp)
+            let wp_r = wp_eval_expr(r, &tmp_r, p_sub, ensures_wp, assigns);
+            wp_eval_expr(l, &tmp_l, wp_r, ensures_wp, assigns)
         }
         HirExpr::Call(func, args, ty) => {
             let mut current_post = post;
@@ -265,7 +306,7 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
             current_post = current_post.substitute(var_name, &call_smt);
             
             for i in (0..args.len()).rev() {
-                current_post = wp_eval_expr(&args[i], &arg_vars[i], current_post, ensures_wp);
+                current_post = wp_eval_expr(&args[i], &arg_vars[i], current_post, ensures_wp, assigns);
             }
             current_post
         }
@@ -378,7 +419,7 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
 fn collect_modified_vars_stmt(stmt: &HirStmt, vars: &mut std::collections::HashSet<String>) {
     match stmt {
         HirStmt::Expr(expr) => collect_modified_vars_expr(expr, vars),
-        HirStmt::While(_, body, _, _) | HirStmt::For(_, _, body) | HirStmt::GhostBlock(body) => {
+        HirStmt::While(_, body, _, _, _) | HirStmt::For(_, _, body, _) | HirStmt::GhostBlock(body) => {
             for s in &body.statements {
                 collect_modified_vars_stmt(s, vars);
             }

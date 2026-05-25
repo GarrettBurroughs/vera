@@ -456,10 +456,19 @@ impl LoweringContext {
         // parameters, because they can reference the function's formal parameters.
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
+        let mut assigns = Vec::new();
         if let Some(spec) = func.spec() {
+            let prev_unsafe = self.in_unsafe_block;
+            self.in_unsafe_block = true;
             for req in spec.requires_clauses() {
                 if let Some(e) = req.expr() {
                     requires.push(self.lower_expr(&e));
+                }
+            }
+            
+            for ass in spec.assigns_clauses() {
+                for expr in ass.exprs() {
+                    assigns.push(self.lower_expr(&expr));
                 }
             }
             
@@ -473,6 +482,7 @@ impl LoweringContext {
                 }
             }
             self.exit_scope();
+            self.in_unsafe_block = prev_unsafe;
         }
 
         let body = match func.body() {
@@ -490,6 +500,7 @@ impl LoweringContext {
             body,
             requires,
             ensures,
+            assigns,
         })
     }
 
@@ -752,21 +763,29 @@ impl LoweringContext {
                 
                 let mut invariants = Vec::new();
                 let mut decreases = None;
+                let mut assigns = Vec::new();
                 if let Some(spec) = while_stmt.spec() {
+                    let prev_unsafe = self.in_unsafe_block;
+                    self.in_unsafe_block = true;
                     for inv in spec.invariant_clauses() {
                         if let Some(expr) = inv.expr() {
                             invariants.push(self.lower_expr(&expr));
                         }
                     }
-                    // Extract the first decreases clause for termination proofs.
                     decreases = spec.decreases_clauses()
                         .next()
                         .and_then(|d| d.expr())
                         .map(|e| self.lower_expr(&e));
+                    for ass in spec.assigns_clauses() {
+                        for expr in ass.exprs() {
+                            assigns.push(self.lower_expr(&expr));
+                        }
+                    }
+                    self.in_unsafe_block = prev_unsafe;
                 }
                 
                 let body = while_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
-                HirStmt::While(cond, body, invariants, decreases)
+                HirStmt::While(cond, body, invariants, decreases, assigns)
             }
             ast::Stmt::BreakStmt(_) => {
                 HirStmt::Break
@@ -793,7 +812,11 @@ impl LoweringContext {
                 let body = for_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
                 self.exit_scope();
                 
-                HirStmt::For(item_name, iterable, body)
+                let mut assigns = Vec::new();
+                // If we want to support spec blocks in For loops, we would parse them here.
+                // For now we leave it empty.
+                
+                HirStmt::For(item_name, iterable, body, assigns)
             }
         }
     }
@@ -1555,7 +1578,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
             HirStmt::Return(Some(e)) => get_captures(e, &mut new_bound, captures),
             HirStmt::Return(None) | HirStmt::Break | HirStmt::Continue | HirStmt::Error => {}
             HirStmt::GhostBlock(ghost_body) => get_captures_block(ghost_body, &mut new_bound, captures),
-            HirStmt::While(cond, body, invs, decreases) => {
+            HirStmt::While(cond, body, invs, decreases, _) => {
                 get_captures(cond, &mut new_bound, captures);
                 for inv in invs {
                     get_captures(inv, &mut new_bound, captures);
@@ -1565,7 +1588,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
                 }
                 get_captures_block(body, &mut new_bound, captures);
             }
-            HirStmt::For(name, iter, body) => {
+            HirStmt::For(name, iter, body, _) => {
                 get_captures(iter, &mut new_bound, captures);
                 let mut b2 = new_bound.clone();
                 b2.insert(name.clone());

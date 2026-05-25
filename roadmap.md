@@ -61,10 +61,10 @@ This document outlines the macro-level phases required to build the complete Ver
 - [ ] **Test Directives**: Update tests (e.g. `016_for_loop.vera`, `017_try_operator.vera`, `025_refinement_types.vera`) from `verify-fail` or `run-pass` to verify their respective features once implemented.
 - [ ] **Framing Analysis**: `assigns` clauses parsing and semantics, enforcing immutability of unassigned memory in loops and functions.
 - [ ] **Precondition Vacuity Checking**: Automated `unsat` check for preconditions before function verification.
-- [ ] **`std.spec` Core Library**: Implement `is_sorted`, `permutation`, `all_distinct`, `contains` natively in WP logic.
+
 
 ### 3. Compiler Architecture & Tools
-- [ ] **Module System**: `import`, path resolution, file-system mapping, `pub` visibility scopes.
+- [ ] **Module System**: `import`, path resolution, file-system mapping, `pub` visibility scopes. Support including spec-only files (e.g. `std.spec`) to avoid baking them into core logic.
 - [ ] **Incremental Query Engine**: Integrate `salsa` for incremental parsing, type-checking, and isolated background verification queries.
 - [ ] **Self-Hosting Optimizations**: Implement `Strip Mode` in parser to discard CST metadata (comments/whitespace) during CLI builds for memory efficiency.
 - [ ] **Binary Output**: Expand `compile_to_binary` to cross-compile executable ELF/PE formats and object files properly linking system `libc`.

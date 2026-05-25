@@ -1,0 +1,15 @@
+// run-pass
+func modify_ab(a: ptr i32, b: ptr i32)
+spec {
+    assigns *a, *b;
+}
+{
+    unsafe {
+        *a = 1;
+        *b = 2;
+    };
+}
+
+func main(): i32 {
+    return 0;
+}

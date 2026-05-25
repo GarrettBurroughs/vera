@@ -207,7 +207,7 @@ impl<'ctx> CodeGen<'ctx> {
             HirStmt::Expr(expr) => {
                 self.compile_expr(expr)?;
             }
-            HirStmt::While(cond, body, _invariants, _decreases) => {
+            HirStmt::While(cond, body, _invariants, _decreases, _assigns) => {
                 let parent_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                 
                 let header_block = self.context.append_basic_block(parent_func, "while.cond");
@@ -235,7 +235,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // 3. Continue compiling after loop in merge block
                 self.builder.position_at_end(merge_block);
             }
-            HirStmt::For(item_name, iterable, body) => {
+            HirStmt::For(item_name, iterable, body, _assigns) => {
                 let iter_val = self.compile_expr(iterable)?;
                 let iter_ty = iterable.ty();
 

@@ -68,7 +68,7 @@ impl BorrowChecker {
             HirStmt::Assert(expr) | HirStmt::Assume(expr) => {
                 self.check_expr(expr, ctx);
             }
-            HirStmt::While(cond, body, invariants, decreases) => {
+            HirStmt::While(cond, body, invariants, decreases, assigns) => {
                 self.check_expr(cond, ctx);
                 for inv in invariants {
                     self.check_expr(inv, ctx);
@@ -78,7 +78,7 @@ impl BorrowChecker {
                 }
                 self.check_block(body, ctx);
             }
-            HirStmt::For(name, iterable, body) => {
+            HirStmt::For(name, iterable, body, assigns) => {
                 self.check_expr(iterable, ctx);
                 // Inline block checking here so we can declare the iteration variable
                 // inside the same scope that the block body uses. Calling check_block

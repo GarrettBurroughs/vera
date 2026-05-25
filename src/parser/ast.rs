@@ -631,8 +631,8 @@ impl DecreasesClause {
 }
 
 impl AssignsClause {
-    pub fn expr(&self) -> Option<Expr> {
-        self.syntax().children().find_map(Expr::cast)
+    pub fn exprs(&self) -> impl Iterator<Item = Expr> {
+        self.syntax().children().filter_map(Expr::cast)
     }
 }
 

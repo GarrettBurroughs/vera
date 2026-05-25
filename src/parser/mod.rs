@@ -398,6 +398,10 @@ impl<'a> Parser<'a> {
                 self.start_node(SyntaxKind::ASSIGNS_CLAUSE);
                 self.advance();
                 self.parse_expr();
+                while self.at(SyntaxKind::Comma) {
+                    self.advance();
+                    self.parse_expr();
+                }
                 self.expect(SyntaxKind::Semi);
                 self.finish_node();
             } else {

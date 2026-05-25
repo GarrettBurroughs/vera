@@ -1,0 +1,15 @@
+// run-pass
+func modify_p(p: ptr i32)
+spec {
+    requires valid(p);
+    assigns *p;
+}
+{
+    unsafe {
+        *p = 10;
+    };
+}
+
+func main(): i32 {
+    return 0;
+}
