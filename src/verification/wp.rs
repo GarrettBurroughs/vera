@@ -38,21 +38,20 @@ pub fn verify_func(func: &HirFunc) -> Result<(), VerificationError> {
 
     // 3.7. Precondition Vacuity Checking
     // Disallow contradictory preconditions that make the function trivially verifiable
-    if !check_sat(&precondition)? {
-        return Err(VerificationError::VacuousPrecondition(format!("Function '{}' has vacuous (unsatisfiable) preconditions.", func.name)));
+    if !check_sat(&precondition, func.span)? {
+        return Err(VerificationError::VacuousPrecondition { message: format!("Function '{}' has vacuous (unsatisfiable) preconditions.", func.name), span: func.span });
     }
 
     // 4. Final Verification Condition (VC): Requires => WP
     let vc = SmtExpr::Implies(Box::new(precondition), Box::new(current_wp));
 
     let query = SmtExpr::Not(Box::new(vc));
-    println!("QUERY for {}: {}", func.name.as_str(), query.to_smtlib2());
 
     // 6. Invoke Z3
-    let is_sat = check_sat(&query)?;
+    let is_sat = check_sat(&query, func.span)?;
 
     if is_sat {
-        Err(VerificationError::ProofFailed(format!("Function '{}' failed verification.", func.name)))
+        Err(VerificationError::ProofFailed { message: format!("Function '{}' failed verification.", func.name), span: func.span })
     } else {
         Ok(()) // Unsat means valid
     }

@@ -100,6 +100,7 @@ fn setup_logging(cli: &Cli) {
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
+            .with_writer(std::io::stderr)
             .init();
     }
 }
