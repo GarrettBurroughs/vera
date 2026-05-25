@@ -171,7 +171,7 @@ impl<'ctx> CodeGen<'ctx> {
                 BasicTypeEnum::StructType(s) => s.const_zero().into(),
                 BasicTypeEnum::ArrayType(a) => a.const_zero().into(),
                 BasicTypeEnum::FloatType(f) => f.const_zero().into(),
-                _ => panic!("Unsupported return type for implicit return"),
+                other => return Err(format!("unsupported implicit return type: {other:?}")),
             };
             self.builder.build_return(Some(&default_val)).unwrap();
         }
@@ -211,7 +211,7 @@ impl<'ctx> CodeGen<'ctx> {
                         BasicTypeEnum::StructType(s) => s.const_zero().into(),
                         BasicTypeEnum::ArrayType(a) => a.const_zero().into(),
                         BasicTypeEnum::FloatType(f) => f.const_zero().into(),
-                        _ => panic!("Unsupported return type for implicit return"),
+                        other => return Err(format!("unsupported void return type: {other:?}")),
                     };
                     self.builder.build_return(Some(&default_val)).unwrap();
                 }
