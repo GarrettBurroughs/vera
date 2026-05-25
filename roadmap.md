@@ -66,7 +66,7 @@ This document outlines the macro-level phases required to build the complete Ver
 ### 3. Compiler Architecture & Tools
 - [x] **Module System**: `import`, path resolution, file-system mapping, `pub` visibility scopes. Support including spec-only files (e.g. `std.spec`) to avoid baking them into core logic.
 - [x] **Incremental Query Engine**: Bespoke `QueryContext` with memoized queries for HIR lowering, borrow-checking, and per-function verification; revision-based cache invalidation for LSP incremental re-compilation.
-- [ ] **Self-Hosting Optimizations**: Implement `Strip Mode` in parser to discard CST metadata (comments/whitespace) during CLI builds for memory efficiency.
+- [x] **Self-Hosting Optimizations**: Implement `Strip Mode` in parser to discard CST metadata (comments/whitespace) during CLI builds for memory efficiency.
 - [x] **Binary Output**: Expand `compile_to_binary` to cross-compile executable ELF/PE formats and object files properly linking system `libc`.
 
 ### 4. Language Server Protocol (LSP) Features
