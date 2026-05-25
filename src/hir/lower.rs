@@ -880,7 +880,7 @@ impl LoweringContext {
                     let mut direct_name = String::new();
                     if let ast::Expr::NameRef(name_ref) = &callee_ast {
                         let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                        if name == "Ok" || name == "Err" || self.functions.contains_key(&name) {
+                        if name == "Ok" || name == "Err" || name == "valid" || name == "valid_read" || name == "separated" || self.functions.contains_key(&name) {
                             is_direct = true;
                             direct_name = name.clone();
                         } else if self.generic_templates.funcs.contains_key(&name) {
@@ -918,6 +918,8 @@ impl LoweringContext {
                         } else if direct_name == "Err" {
                             let arg = args.into_iter().next().unwrap_or(HirExpr::Error);
                             HirExpr::ResultErr(Box::new(arg), self.current_func_ret_type.clone())
+                        } else if direct_name == "valid" || direct_name == "valid_read" || direct_name == "separated" {
+                            HirExpr::Call(direct_name, args, HirType::Bool)
                         } else {
                             let func_info = self.functions.get(&direct_name).cloned().unwrap();
                             if args.len() != func_info.0.len() {

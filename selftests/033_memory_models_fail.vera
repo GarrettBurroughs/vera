@@ -1,0 +1,11 @@
+// verify-fail
+
+func test_memory_fail(ptr1: ptr i32, ptr2: ptr i32)
+spec {
+    requires separated(ptr1, ptr2);
+    requires valid_read(ptr2);
+}
+{
+    // We didn't require valid(ptr1), so this should fail
+    assert valid(ptr1);
+}

@@ -167,7 +167,10 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
     smt_script.push_str("(declare-fun unwrap_ok (Int) Int)\n");
     smt_script.push_str("(declare-fun unwrap_err (Int) Int)\n");
 
-
+    // Memory intrinsic predicates
+    smt_script.push_str("(declare-fun valid (Int) Bool)\n");
+    smt_script.push_str("(declare-fun valid_read (Int) Bool)\n");
+    smt_script.push_str("(declare-fun separated (Int Int) Bool)\n");
     // For now, we assume all variables are integers. We would need type tracking in SmtExpr
     // to do this properly.
     for var in vars {

@@ -254,7 +254,10 @@ fn wp_eval_expr(expr: &HirExpr, var_name: &str, post: SmtExpr, ensures_wp: &SmtE
                 arg_vars.push(format!("{}_arg_{}", var_name, i));
             }
             
-            let call_smt = if ty == &HirType::I32 {
+            let call_smt = if func == "valid" || func == "valid_read" || func == "separated" {
+                let smt_args: Vec<SmtExpr> = arg_vars.iter().map(|n| SmtExpr::Var(n.clone())).collect();
+                SmtExpr::FuncCall(func.clone(), smt_args)
+            } else if ty == &HirType::I32 {
                 SmtExpr::Var(format!("__call_{}", func))
             } else {
                 SmtExpr::BoolConst(false)
@@ -326,10 +329,11 @@ pub(crate) fn hir_to_smt(expr: &HirExpr) -> SmtExpr {
                 }
             }
         }
-        HirExpr::Call(name, _, ty) => {
-            // For Phase 5, we treat function calls as opaque values in WP.
-            // In the future, we will use uninterpreted functions or inline contracts.
-            if ty == &HirType::I32 {
+        HirExpr::Call(name, args, ty) => {
+            if name == "valid" || name == "valid_read" || name == "separated" {
+                let smt_args: Vec<SmtExpr> = args.iter().map(|a| hir_to_smt(a)).collect();
+                SmtExpr::FuncCall(name.clone(), smt_args)
+            } else if ty == &HirType::I32 {
                 SmtExpr::Var(format!("__call_{}", name)) // Treat as an arbitrary variable
             } else {
                 SmtExpr::BoolConst(false)
