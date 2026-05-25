@@ -23,7 +23,9 @@ pub enum ParseMode {
 /// It consumes a string of source code and constructs a Concrete Syntax Tree (CST)
 /// using rowan via an event-driven sink architecture.
 pub struct Parser<'a> {
-    tokens: Vec<(SyntaxKind, &'a str)>,
+    /// `(kind, text, byte_start)` — the third element is the token's start offset
+    /// in the original source, used to attach accurate positions to parse errors.
+    tokens: Vec<(SyntaxKind, &'a str, u32)>,
     cursor: usize,
     events: Vec<Event>,
     forbid_struct_expr: bool,
@@ -55,7 +57,8 @@ impl<'a> Parser<'a> {
             {
                 continue;
             }
-            tokens.push((kind, lexer.slice()));
+            let byte_start = lexer.span().start as u32;
+            tokens.push((kind, lexer.slice(), byte_start));
         }
 
         Self {
@@ -67,9 +70,11 @@ impl<'a> Parser<'a> {
     }
     
     /// Parses the tokens into a rowan CST.
-    pub fn parse(mut self) -> (SyntaxNode, Vec<String>) {
+    ///
+    /// Returns `(cst, errors)` where each error carries `(message, byte_offset)`.
+    pub fn parse(mut self) -> (SyntaxNode, Vec<(String, u32)>) {
         self.start_node(SyntaxKind::SOURCE_FILE);
-        
+
         self.eat_trivia();
         while self.cursor < self.tokens.len() {
             let mut peek = self.cursor;
@@ -84,7 +89,7 @@ impl<'a> Parser<'a> {
                     peek += 1;
                 }
             }
-            
+
             let kind = if peek < self.tokens.len() { self.tokens[peek].0 } else { SyntaxKind::ErrorToken };
             
             if kind == SyntaxKind::KwFunc {
@@ -141,7 +146,7 @@ impl<'a> Parser<'a> {
             false
         }
     }
-    
+
     fn nth_at(&self, mut n: usize, kind: SyntaxKind) -> bool {
         let mut cur = self.cursor;
         while cur < self.tokens.len() {
@@ -158,7 +163,7 @@ impl<'a> Parser<'a> {
         }
         false
     }
-    
+
     fn advance(&mut self) {
         self.eat_trivia();
         if self.cursor < self.tokens.len() {
@@ -166,7 +171,7 @@ impl<'a> Parser<'a> {
             self.cursor += 1;
         }
     }
-    
+
     fn expect(&mut self, kind: SyntaxKind) {
         if self.at(kind) {
             self.advance();
@@ -174,7 +179,7 @@ impl<'a> Parser<'a> {
             self.error(format!("Expected {:?}", kind));
         }
     }
-    
+
     fn start_node(&mut self, kind: SyntaxKind) {
         self.events.push(Event::StartNode(kind));
     }
@@ -184,9 +189,17 @@ impl<'a> Parser<'a> {
     }
     
     fn error<S: Into<String>>(&mut self, msg: S) {
-        self.events.push(Event::Error(msg.into()));
+        let offset = if self.cursor < self.tokens.len() {
+            self.tokens[self.cursor].2
+        } else if !self.tokens.is_empty() {
+            let (_, text, start) = self.tokens[self.tokens.len() - 1];
+            start + text.len() as u32
+        } else {
+            0
+        };
+        self.events.push(Event::Error(msg.into(), offset));
     }
-    
+
     fn eat_trivia(&mut self) {
         while self.cursor < self.tokens.len() {
             let kind = self.tokens[self.cursor].0;
@@ -1247,7 +1260,7 @@ mod tests {
     use super::*;
     use crate::parser::ast::{AstNode, SourceFile};
 
-    fn parse(input: &str) -> (SyntaxNode, Vec<String>) {
+    fn parse(input: &str) -> (SyntaxNode, Vec<(String, u32)>) {
         Parser::new(input).parse()
     }
 

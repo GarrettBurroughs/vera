@@ -112,9 +112,127 @@ pub fn byte_offset_to_position(source: &str, offset: u32) -> (u32, u32) {
     (line, col)
 }
 
+/// Render a `Diagnostic` to a human-readable string.
+///
+/// Set `color = true` to emit ANSI escape sequences for terminal output.
+/// Call `render_diagnostic_cli` instead for automatic colour detection.
+pub fn render_diagnostic(diag: &Diagnostic, file_path: &str, source: &str, color: bool) -> String {
+    let c = |code: &str, s: &str| -> String {
+        if color { format!("\x1b[{}m{}\x1b[0m", code, s) } else { s.to_string() }
+    };
+
+    let severity_str = match diag.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        Severity::Info => "info",
+        Severity::Hint => "hint",
+    };
+    let sev_color = match diag.severity {
+        Severity::Error => "1;31",
+        Severity::Warning => "1;33",
+        _ => "1;36",
+    };
+
+    let mut out = String::new();
+
+    // "error[E001]: message"
+    out += &format!("{}{}: {}\n",
+        c(sev_color, severity_str),
+        c(sev_color, &format!("[{}]", diag.code)),
+        c("1", &diag.message),
+    );
+
+    if diag.primary_span.is_unknown() {
+        return out;
+    }
+
+    let (line, col) = byte_offset_to_position(source, diag.primary_span.start);
+    let line_no = line + 1;
+    let col_no = col + 1;
+    let gutter = line_no.to_string().len();
+
+    // " --> file:line:col"
+    out += &format!(" {} {}:{}:{}\n", c("36", "-->"), file_path, line_no, col_no);
+
+    let source_line = source.lines().nth(line as usize).unwrap_or("");
+
+    // blank gutter line
+    out += &format!("{:gutter$} {}\n", "", c("36", "|"));
+
+    // "N | source_line"
+    out += &format!("{} {} {}\n", c("36", &line_no.to_string()), c("36", "|"), source_line);
+
+    // underline: "  |    ^^^^ message"
+    let underline_len = if !diag.primary_span.is_unknown()
+        && diag.primary_span.end > diag.primary_span.start
+        && byte_offset_to_position(source, diag.primary_span.end).0 == line
+    {
+        let end_col = byte_offset_to_position(source, diag.primary_span.end).1;
+        (end_col.saturating_sub(col)).max(1) as usize
+    } else {
+        1
+    };
+    let underline = "^".repeat(underline_len);
+    let spaces = " ".repeat(col as usize);
+    out += &format!("{:gutter$} {} {}{} {}\n",
+        "", c("36", "|"), spaces, c(sev_color, &underline), c(sev_color, &diag.message),
+    );
+
+    if let Some(ref help) = diag.help {
+        out += &format!("{:gutter$} {} help: {}\n", "", c("36", "="), help);
+    }
+
+    out
+}
+
+/// Render a `Diagnostic` for terminal output, auto-detecting colour support.
+///
+/// Colour is suppressed when the `NO_COLOR` environment variable is set.
+pub fn render_diagnostic_cli(diag: &Diagnostic, file_path: &str, source: &str) -> String {
+    render_diagnostic(diag, file_path, source, std::env::var_os("NO_COLOR").is_none())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_render_diagnostic_basic() {
+        // "x" is at byte 30 (line 2, col 12 in 1-indexed)
+        let source = "func main(): i32 {\n    return x + 1;\n}";
+        let span = DiagnosticSpan::new(0, 30, 31);
+        let diag = Diagnostic::error("E001", "undefined variable `x`", span);
+        let rendered = render_diagnostic(&diag, "test.vera", source, false);
+
+        assert!(rendered.contains("error[E001]"), "code missing: {rendered}");
+        assert!(rendered.contains("undefined variable"), "message missing: {rendered}");
+        assert!(rendered.contains("test.vera"), "filename missing: {rendered}");
+        assert!(rendered.contains("2:12"), "line:col missing: {rendered}");
+        assert!(rendered.contains("return x + 1"), "source line missing: {rendered}");
+        assert!(rendered.contains('^'), "caret missing: {rendered}");
+    }
+
+    #[test]
+    fn test_render_diagnostic_unknown_span() {
+        let source = "func main(): i32 { return 0; }";
+        let diag = Diagnostic::error("E002", "some error", DiagnosticSpan::default());
+        let rendered = render_diagnostic(&diag, "test.vera", source, false);
+
+        assert!(rendered.contains("error[E002]"), "code missing: {rendered}");
+        assert!(rendered.contains("some error"), "message missing: {rendered}");
+        assert!(!rendered.contains("-->"), "should not show location for unknown span: {rendered}");
+    }
+
+    #[test]
+    fn test_render_diagnostic_help() {
+        let span = DiagnosticSpan::new(0, 0, 4);
+        let source = "func main(): i32 { return 0; }";
+        let diag = Diagnostic::error("E003", "bad function", span)
+            .with_help("add a return statement");
+        let rendered = render_diagnostic(&diag, "test.vera", source, false);
+
+        assert!(rendered.contains("help: add a return statement"), "help missing: {rendered}");
+    }
 
     #[test]
     fn test_byte_offset_to_position_first_line() {

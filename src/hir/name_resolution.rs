@@ -142,7 +142,6 @@ impl NameResolver {
                 }
             }
 
-            eprintln!("Built scope for file {}: module {}, aliases {:?}", file_id, scope.module_name, scope.module_aliases);
             resolver.scopes.insert(file_id, scope);
         }
 
@@ -173,8 +172,6 @@ impl NameResolver {
             // Path like `math::add`
             let mod_name = &segments[0];
             let item_name = &segments[1];
-            
-            eprintln!("resolve_path: current_file={}, mod_name={}, scope.module_aliases={:?}", current_file, mod_name, scope.module_aliases);
             
             if let Some(target_mod_name) = scope.module_aliases.get(mod_name) {
                 // Check visibility

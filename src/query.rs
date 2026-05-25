@@ -106,14 +106,15 @@ impl QueryContext {
     /// downstream caches so the next query will recompute from scratch.
     pub fn update_file_source(&mut self, file_id: FileId, new_source: String) {
         let parser = crate::parser::Parser::new_with_mode(&new_source, self.workspace.parse_mode());
-        let (cst, errors) = parser.parse();
-        let has_errors = !errors.is_empty();
+        let (cst, parse_errors) = parser.parse();
+        let has_errors = !parse_errors.is_empty();
         let ast = SourceFile::cast(cst).expect("root must be SourceFile");
 
         if let Some(file_data) = self.workspace.files.get_mut(&file_id) {
             file_data.source = new_source;
             file_data.ast = ast;
             file_data.has_errors = has_errors;
+            file_data.parse_errors = parse_errors;
         }
 
         let rev = self.revisions.entry(file_id).or_insert(1);

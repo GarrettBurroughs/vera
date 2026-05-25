@@ -10,7 +10,20 @@ mod verification;
 mod workspace;
 mod query;
 pub mod diagnostics;
-use crate::parser::ast::AstNode;
+
+use crate::hir::lower::SemanticError;
+
+fn semantic_error_code(err: &SemanticError) -> &'static str {
+    match err {
+        SemanticError::TypeMismatch { .. } => "E0001",
+        SemanticError::UnknownType { .. } => "E0002",
+        SemanticError::Custom { .. } => "E0003",
+        SemanticError::PrivateItemAccess { .. } => "E0004",
+        SemanticError::UndefinedVariable { .. } => "E0005",
+        SemanticError::ImmutableAssignment { .. } => "E0006",
+        SemanticError::BinOpMismatch { .. } => "E0007",
+    }
+}
 
 /// Write `content` to `--emit-out <file>` if specified, otherwise to stdout.
 fn emit_output(emit_out: Option<&str>, content: &str) {
@@ -115,14 +128,11 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         return Err(());
     }
 
-    // CLI builds use strip mode to discard CST trivia (whitespace/comments) for
-    // lower memory usage. Lossless mode is reserved for the LSP server.
-    // Exception: --emit=cst uses lossless so trivia is visible in the output.
-    let mut qctx = if emit == Some("cst") {
-        query::QueryContext::new()
-    } else {
-        query::QueryContext::new_strip()
-    };
+    // Use lossless mode so CST byte offsets match the original source.
+    // Accurate offsets are required by the error renderer and the LSP server.
+    // Strip mode is available via `QueryContext::new_strip()` for memory-constrained
+    // environments, but sacrifices span accuracy.
+    let mut qctx = query::QueryContext::new();
     let entry_file_id = qctx.load_entry_file(file).map_err(|e| {
         error!("Workspace error: {:?}", e);
     })?;
@@ -134,18 +144,42 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
     }
 
     if qctx.has_parse_errors() {
+        // Render each parse error with a source snippet.
+        for file_data in qctx.workspace().files.values() {
+            for (msg, offset) in &file_data.parse_errors {
+                let span = diagnostics::DiagnosticSpan::new(file_data.path.to_str().map(|_| 0).unwrap_or(0), *offset, *offset);
+                let diag = diagnostics::Diagnostic::error("P0001", msg.as_str(), span);
+                eprintln!("{}", diagnostics::render_diagnostic_cli(&diag, file_data.path.to_str().unwrap_or("?"), &file_data.source));
+            }
+        }
         return Err(());
     }
 
     // HIR lowering
-    {
+    let semantic_errors: Vec<_> = {
         let (_, errors) = qctx.query_hir_program();
-        if !errors.is_empty() {
-            for err in errors {
-                error!("Semantic Error: {err}");
-            }
-            return Err(());
+        errors.to_vec()
+    };
+    if !semantic_errors.is_empty() {
+        for err in &semantic_errors {
+            let span = err.span();
+            let rendered = if !span.is_unknown() {
+                if let Some(file_data) = qctx.workspace().files.get(&span.file_id) {
+                    let diag = diagnostics::Diagnostic::error(
+                        semantic_error_code(err),
+                        err.to_string(),
+                        diagnostics::DiagnosticSpan::new(span.file_id, span.start, span.end),
+                    );
+                    diagnostics::render_diagnostic_cli(&diag, file_data.path.to_str().unwrap_or("?"), &file_data.source)
+                } else {
+                    format!("error: {err}\n")
+                }
+            } else {
+                format!("error: {err}\n")
+            };
+            eprint!("{rendered}");
         }
+        return Err(());
     }
 
     if emit == Some("hir") {
@@ -159,7 +193,7 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         let errors = qctx.query_borrow_check();
         if !errors.is_empty() {
             for err in errors {
-                error!("Borrow Error: {err}");
+                eprintln!("error: {err}");
             }
             return Err(());
         }

@@ -3,13 +3,13 @@ use rowan::{GreenNode, GreenNodeBuilder, Language};
 
 /// The `Sink` consumes an event stream from the parser and builds a
 /// lossless Concrete Syntax Tree (CST) using `rowan`.
-/// 
+///
 /// We use an event-sink architecture to separate the recursive descent parsing logic
 /// from the complex state management of rowan's GreenNodeBuilder. This makes lookahead
 /// and error recovery significantly easier.
 pub struct Sink<'a> {
     builder: GreenNodeBuilder<'static>,
-    tokens: &'a [(SyntaxKind, &'a str)],
+    tokens: &'a [(SyntaxKind, &'a str, u32)],
     cursor: usize,
     events: Vec<Event>,
 }
@@ -19,11 +19,12 @@ pub enum Event {
     StartNode(SyntaxKind),
     AddToken,
     FinishNode,
-    Error(String),
+    /// Parse error: (message, byte offset of the offending token in the original source).
+    Error(String, u32),
 }
 
 impl<'a> Sink<'a> {
-    pub fn new(tokens: &'a [(SyntaxKind, &'a str)], events: Vec<Event>) -> Self {
+    pub fn new(tokens: &'a [(SyntaxKind, &'a str, u32)], events: Vec<Event>) -> Self {
         Self {
             builder: GreenNodeBuilder::new(),
             tokens,
@@ -33,7 +34,9 @@ impl<'a> Sink<'a> {
     }
 
     /// Processes all events and builds the final GreenNode.
-    pub fn finish(mut self) -> (GreenNode, Vec<String>) {
+    ///
+    /// Returns `(cst, errors)` where each error carries `(message, byte_offset)`.
+    pub fn finish(mut self) -> (GreenNode, Vec<(String, u32)>) {
         let mut errors = Vec::new();
         let events = std::mem::take(&mut self.events);
         let mut depth = 0;
@@ -47,7 +50,7 @@ impl<'a> Sink<'a> {
                 }
                 Event::AddToken => {
                     self.eat_trivia();
-                    let (kind, text) = self.tokens[self.cursor];
+                    let (kind, text, _) = self.tokens[self.cursor];
                     self.builder.token(VeraLanguage::kind_to_raw(kind), text);
                     self.cursor += 1;
                 }
@@ -58,8 +61,8 @@ impl<'a> Sink<'a> {
                     }
                     self.builder.finish_node();
                 }
-                Event::Error(err) => {
-                    errors.push(err);
+                Event::Error(err, offset) => {
+                    errors.push((err, offset));
                 }
             }
         }
@@ -70,7 +73,7 @@ impl<'a> Sink<'a> {
     /// Attaches whitespace and comments to the current node as trivia.
     fn eat_trivia(&mut self) {
         while self.cursor < self.tokens.len() {
-            let (kind, text) = self.tokens[self.cursor];
+            let (kind, text, _) = self.tokens[self.cursor];
             if matches!(kind, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
                 self.builder.token(VeraLanguage::kind_to_raw(kind), text);
                 self.cursor += 1;

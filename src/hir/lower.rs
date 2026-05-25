@@ -5,42 +5,56 @@ use crate::parser::ast::{self, AstNode};
 use crate::workspace::FileId;
 use crate::hir::{Span, HirExprKind, HirStmtKind, HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern, Path, SymbolId};
 
-#[derive(Error, Debug, Diagnostic)]
+#[derive(Error, Debug, Clone, Diagnostic)]
 pub enum SemanticError {
     #[error("Type mismatch: expected {expected:?}, found {found:?}")]
     #[diagnostic(code(vera::type_mismatch))]
     TypeMismatch {
         expected: HirType,
         found: HirType,
+        #[doc(hidden)]
+        span: Span,
     },
-    
+
     #[error("Unknown type: {name}")]
     #[diagnostic(code(vera::unknown_type))]
     UnknownType {
         name: String,
+        #[doc(hidden)]
+        span: Span,
     },
-    
-    #[error("{0}")]
+
+    #[error("{message}")]
     #[diagnostic(code(vera::custom))]
-    Custom(String),
+    Custom {
+        message: String,
+        #[doc(hidden)]
+        span: Span,
+    },
 
     #[error("Item `{name}` is private and cannot be accessed from outside `{target_module}`")]
     #[diagnostic(code(vera::private_item_access))]
     PrivateItemAccess {
         name: String,
         target_module: String,
+        #[doc(hidden)]
+        span: Span,
     },
 
     #[error("Undefined variable: {name}")]
     #[diagnostic(code(vera::undefined_variable))]
     UndefinedVariable {
         name: String,
+        #[doc(hidden)]
+        span: Span,
     },
 
     #[error("Cannot mutate constant variable: {name}")]
     #[diagnostic(code(vera::immutable_assignment))]
     ImmutableAssignment {
         name: String,
+        #[doc(hidden)]
+        span: Span,
     },
 
     #[error("Binary operator mismatch: cannot apply {op} to {lhs:?} and {rhs:?}")]
@@ -49,7 +63,26 @@ pub enum SemanticError {
         op: String,
         lhs: HirType,
         rhs: HirType,
+        #[doc(hidden)]
+        span: Span,
     },
+}
+
+impl SemanticError {
+    /// Returns the source span where this error occurred.
+    ///
+    /// May be `Span::default()` (unknown) for errors that don't yet have precise location info.
+    pub fn span(&self) -> Span {
+        match self {
+            Self::TypeMismatch { span, .. } => *span,
+            Self::UnknownType { span, .. } => *span,
+            Self::Custom { span, .. } => *span,
+            Self::PrivateItemAccess { span, .. } => *span,
+            Self::UndefinedVariable { span, .. } => *span,
+            Self::ImmutableAssignment { span, .. } => *span,
+            Self::BinOpMismatch { span, .. } => *span,
+        }
+    }
 }
 
 
@@ -122,6 +155,29 @@ pub struct TemplateRegistry {
     pub impls: Vec<(FileId, ast::ImplDecl)>,
 }
 
+/// Walk a CST node's children to find the byte offset of the first
+/// non-trivia (non-whitespace, non-comment) token.
+///
+/// Returns `None` when the node is empty or contains only trivia.
+fn first_significant_token_start(node: &crate::parser::syntax::SyntaxNode) -> Option<u32> {
+    use crate::parser::syntax::SyntaxKind;
+    for child in node.children_with_tokens() {
+        match child {
+            rowan::NodeOrToken::Token(t) => {
+                if !matches!(t.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                    return Some(u32::from(t.text_range().start()));
+                }
+            }
+            rowan::NodeOrToken::Node(n) => {
+                if let Some(start) = first_significant_token_start(&n) {
+                    return Some(start);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub struct LoweringContext {
     pub errors: Vec<SemanticError>,
     pub symbol_table: SymbolTable,
@@ -177,31 +233,35 @@ impl LoweringContext {
         self.symbol_table.pop_scope();
     }
 
-    /// Extracts a `Span` from any CST node by reading rowan's `text_range()`.
+    /// Extracts a `Span` from any CST node, skipping leading trivia tokens.
     ///
-    /// The returned byte offsets are accurate in lossless parse mode (LSP).
-    /// In strip mode (CLI builds) trivia is omitted from the tree so offsets
-    /// diverge from the original source — callers that need display-accurate
-    /// spans should ensure lossless mode was used.
+    /// In lossless mode rowan attaches preceding whitespace to nodes, so a naive
+    /// `text_range().start()` would point at the newline/indent before the keyword.
+    /// This helper walks the node's children to find the first non-trivia token.
+    ///
+    /// Byte offsets are accurate only in lossless parse mode.
     pub fn node_span(&self, node: &impl ast::AstNode) -> Span {
-        let range = node.syntax().text_range();
-        Span::new(
-            self.current_file,
-            u32::from(range.start()),
-            u32::from(range.end()),
-        )
+        let syntax = node.syntax();
+        let start = first_significant_token_start(syntax)
+            .unwrap_or_else(|| u32::from(syntax.text_range().start()));
+        let end = u32::from(syntax.text_range().end());
+        Span::new(self.current_file, start, end)
     }
 
-    /// Extracts the span of an `ast::Stmt` enum value.
+    /// Extracts the span of an `ast::Stmt` enum value, skipping leading trivia.
     pub fn stmt_span(&self, stmt: &ast::Stmt) -> Span {
-        let range = stmt.syntax().text_range();
-        Span::new(self.current_file, u32::from(range.start()), u32::from(range.end()))
+        let syntax = stmt.syntax();
+        let start = first_significant_token_start(syntax)
+            .unwrap_or_else(|| u32::from(syntax.text_range().start()));
+        Span::new(self.current_file, start, u32::from(syntax.text_range().end()))
     }
 
-    /// Extracts the span of an `ast::Expr` enum value.
+    /// Extracts the span of an `ast::Expr` enum value, skipping leading trivia.
     pub fn expr_span(&self, expr: &ast::Expr) -> Span {
-        let range = expr.syntax().text_range();
-        Span::new(self.current_file, u32::from(range.start()), u32::from(range.end()))
+        let syntax = expr.syntax();
+        let start = first_significant_token_start(syntax)
+            .unwrap_or_else(|| u32::from(syntax.text_range().start()));
+        Span::new(self.current_file, start, u32::from(syntax.text_range().end()))
     }
 
     fn current_module_name(&self) -> String {
@@ -212,7 +272,7 @@ impl LoweringContext {
         match self.resolver.resolve_path(self.current_file, segments) {
             Ok(p) => p,
             Err(crate::hir::name_resolution::ResolutionError::PrivateItemAccess { name, target_module }) => {
-                self.errors.push(SemanticError::PrivateItemAccess { name: name.clone(), target_module: target_module.clone() });
+                self.errors.push(SemanticError::PrivateItemAccess { name: name.clone(), target_module: target_module.clone(), span: Span::default() });
                 segments.last().unwrap().clone()
             }
             Err(_) => segments.last().unwrap().clone(),
@@ -739,7 +799,7 @@ impl LoweringContext {
                 } else if let Some(ty) = self.type_aliases.get(&global_name) {
                     ty.clone()
                 } else {
-                    self.errors.push(SemanticError::UnknownType { name: name.clone() });
+                    self.errors.push(SemanticError::UnknownType { name: name.clone(), span: Span::default() });
                     HirType::Error
                 }
             }
@@ -824,9 +884,10 @@ impl LoweringContext {
                     self.errors.push(SemanticError::TypeMismatch {
                         expected,
                         found: expr_ty,
+                        span: self.node_span(ret_stmt),
                     });
                 }
-                
+
                 HirStmt::new(HirStmtKind::Return(expr), Span::default())
             }
             ast::Stmt::LetStmt(let_stmt) => {
@@ -849,6 +910,7 @@ impl LoweringContext {
                     self.errors.push(SemanticError::TypeMismatch {
                         expected: declared_ty.clone(),
                         found: initializer.ty(),
+                        span: self.node_span(let_stmt),
                     });
                 }
 
@@ -884,9 +946,10 @@ impl LoweringContext {
                     self.errors.push(SemanticError::TypeMismatch {
                         expected: HirType::Bool,
                         found: cond.ty(),
+                        span: self.node_span(while_stmt),
                     });
                 }
-                
+
                 let mut invariants = Vec::new();
                 let mut decreases = None;
                 let mut assigns = Vec::new();
@@ -928,7 +991,7 @@ impl LoweringContext {
                     HirType::Slice(t) => *t,
                     HirType::Error => HirType::Error,
                     _ => {
-                        self.errors.push(SemanticError::Custom(format!("Type {:?} is not iterable", iterable.ty())));
+                        self.errors.push(SemanticError::Custom { message: format!("Type {:?} is not iterable", iterable.ty()), span: self.node_span(for_stmt) });
                         HirType::Error
                     }
                 };
@@ -970,7 +1033,7 @@ impl LoweringContext {
                 if let Some((sym_id, ty, _is_const)) = self.lookup_var(&name) {
                     HirExpr::new(HirExprKind::VarRef(Path::from_ident(name), sym_id, ty), Span::default())
                 } else {
-                    self.errors.push(SemanticError::UndefinedVariable { name: name.clone() });
+                    self.errors.push(SemanticError::UndefinedVariable { name: name.clone(), span: self.node_span(name_ref) });
                     HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
@@ -1009,7 +1072,7 @@ impl LoweringContext {
                         }
                         
                         if args.len() != payload_tys.len() {
-                            self.errors.push(SemanticError::UndefinedVariable { name: format!("arity mismatch for variant case {}.{}", variant_name, case_name) });
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("arity mismatch for variant case {}.{}", variant_name, case_name), span: self.node_span(call_expr) });
                             HirExpr::new(HirExprKind::Error, Span::default())
                         } else {
                             for (arg, expected_ty) in args.iter().zip(payload_tys.iter()) {
@@ -1017,19 +1080,19 @@ impl LoweringContext {
                                     self.errors.push(SemanticError::TypeMismatch {
                                         expected: expected_ty.clone(),
                                         found: arg.ty(),
+                                        span: self.node_span(call_expr),
                                     });
                                 }
                             }
                             HirExpr::new(HirExprKind::VariantConstructor(variant_name.clone(), case_name, args, HirType::Variant(variant_name)), Span::default())
                         }
                     } else {
-                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", case_name, variant_name) });
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", case_name, variant_name), span: self.node_span(call_expr) });
                         HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else if let Some(callee_ast) = call_expr.callee() {
                     let mut is_direct = false;
                     let mut direct_name = String::new();
-                    if let ast::Expr::FieldExpr(ref f) = callee_ast { eprintln!("callee base is {:?}", f.base()); }
                     if let ast::Expr::NameRef(name_ref) = &callee_ast {
                         let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                         if name == "Ok" || name == "Err" || name == "valid" || name == "valid_read" || name == "separated" {
@@ -1041,7 +1104,7 @@ impl LoweringContext {
                                 is_direct = true;
                                 direct_name = global_name;
                             } else if self.generic_templates.funcs.contains_key(&global_name) {
-                                self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name) });
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", name), span: self.node_span(call_expr) });
                             }
                         }
                     } else if let ast::Expr::FieldExpr(field_expr) = &callee_ast
@@ -1049,17 +1112,12 @@ impl LoweringContext {
                             let mod_name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
                             let field_name = field_expr.field().and_then(|n| n.ident()).map(|i| i.text().to_string()).unwrap_or_default();
                             
-                            let res = self.resolve_path(&[mod_name.clone(), field_name.clone()]);
-                            eprintln!("resolving {}::{}, result: {:?}", mod_name, field_name, res);
-                            
-                            let global_name = res;
-                            eprintln!("Resolving call {}::{}, global_name: {}", mod_name, field_name, global_name);
-                            eprintln!("contains_key: {}", self.functions.contains_key(&global_name));
+                            let global_name = self.resolve_path(&[mod_name.clone(), field_name.clone()]);
                             if self.functions.contains_key(&global_name) {
                                 is_direct = true;
                                 direct_name = global_name;
                             } else if self.generic_templates.funcs.contains_key(&global_name) {
-                                self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", global_name) });
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("generic function {} requires explicit generic arguments (turbofish)", global_name), span: self.node_span(call_expr) });
                             }
                     } else if let ast::Expr::GenericInstExpr(gen_inst) = &callee_ast
                         && let Some(ast::Expr::NameRef(name_ref)) = gen_inst.expr() {
@@ -1076,10 +1134,10 @@ impl LoweringContext {
                                     direct_name = mono_name;
                                 }
                             } else {
-                                self.errors.push(SemanticError::UndefinedVariable { name: format!("undefined generic function {}", name) });
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("undefined generic function {}", name), span: self.node_span(call_expr) });
                             }
                         }
-                    
+
                     let mut args = Vec::new();
                     if let Some(arg_list) = call_expr.arg_list() {
                         for arg in arg_list.args() {
@@ -1099,7 +1157,7 @@ impl LoweringContext {
                         } else {
                             let func_info = self.functions.get(&direct_name).cloned().unwrap();
                             if args.len() != func_info.0.len() {
-                                self.errors.push(SemanticError::Custom(format!("arity mismatch for {}", direct_name)));
+                                self.errors.push(SemanticError::Custom { message: format!("arity mismatch for {}", direct_name), span: self.node_span(call_expr) });
                                 HirExpr::new(HirExprKind::Error, Span::default())
                             } else {
                                 HirExpr::new(HirExprKind::Call(Path::from_ident(direct_name), SymbolId(0), args, func_info.1.clone()), Span::default())
@@ -1109,13 +1167,13 @@ impl LoweringContext {
                         let callee = self.lower_expr(&callee_ast);
                         if let HirType::Func(param_tys, ret_ty) = callee.ty() {
                             if args.len() != param_tys.len() {
-                                self.errors.push(SemanticError::Custom("arity mismatch for indirect call".to_string()));
+                                self.errors.push(SemanticError::Custom { message: "arity mismatch for indirect call".to_string(), span: self.node_span(call_expr) });
                                 HirExpr::new(HirExprKind::Error, Span::default())
                             } else {
                                 HirExpr::new(HirExprKind::CallIndirect(Box::new(callee), args, *ret_ty), Span::default())
                             }
                         } else if callee.ty() != HirType::Error {
-                            self.errors.push(SemanticError::Custom("expected function type".to_string()));
+                            self.errors.push(SemanticError::Custom { message: "expected function type".to_string(), span: self.node_span(call_expr) });
                             HirExpr::new(HirExprKind::Error, Span::default())
                         } else {
                             HirExpr::new(HirExprKind::Error, Span::default())
@@ -1154,11 +1212,11 @@ impl LoweringContext {
 
                     if op == BinaryOp::Assign {
                         if !lhs.is_lvalue() {
-                            self.errors.push(SemanticError::Custom("invalid assignment target: not an lvalue".to_string()));
+                            self.errors.push(SemanticError::Custom { message: "invalid assignment target: not an lvalue".to_string(), span: self.node_span(bin_expr) });
                         } else if let HirExprKind::VarRef(name, _, _) = &lhs.kind
                             && let Some((_, _, is_const)) = self.lookup_var(&name.as_str())
                                 && is_const {
-                                    self.errors.push(SemanticError::ImmutableAssignment { name: name.to_string() });
+                                    self.errors.push(SemanticError::ImmutableAssignment { name: name.to_string(), span: self.node_span(bin_expr) });
                                 }
                     }
 
@@ -1169,6 +1227,7 @@ impl LoweringContext {
                                     op: tok.text().to_string(),
                                     lhs: lhs.ty(),
                                     rhs: rhs.ty(),
+                                    span: self.node_span(bin_expr),
                                 });
                                 return HirExpr::new(HirExprKind::Error, Span::default());
                             }
@@ -1178,6 +1237,7 @@ impl LoweringContext {
                                     op: tok.text().to_string(),
                                     lhs: lhs.ty(),
                                     rhs: rhs.ty(),
+                                    span: self.node_span(bin_expr),
                                 });
                                 return HirExpr::new(HirExprKind::Error, Span::default());
                             }
@@ -1186,6 +1246,7 @@ impl LoweringContext {
                                 op: tok.text().to_string(),
                                 lhs: lhs.ty(),
                                 rhs: rhs.ty(),
+                                span: self.node_span(bin_expr),
                             });
                             return HirExpr::new(HirExprKind::Error, Span::default());
                         }
@@ -1212,9 +1273,10 @@ impl LoweringContext {
                     
                     if inner.ty() != HirType::Error && inner.ty() != expected_ty {
                         self.errors.push(SemanticError::BinOpMismatch {
-                            op: op_tok.text().to_string(), // Reusing BinOpMismatch for unary
+                            op: op_tok.text().to_string(),
                             lhs: inner.ty(),
                             rhs: inner.ty(),
+                            span: self.node_span(prefix_expr),
                         });
                         return HirExpr::new(HirExprKind::Error, Span::default());
                     }
@@ -1279,15 +1341,16 @@ impl LoweringContext {
                                 self.errors.push(SemanticError::TypeMismatch {
                                     expected: def_ty.clone(),
                                     found: f_expr.ty(),
+                                    span: self.node_span(struct_expr),
                                 });
                             }
                         } else {
-                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, mono_name) });
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, mono_name), span: self.node_span(struct_expr) });
                         }
                     }
                     HirExpr::new(HirExprKind::StructExpr(Path::from_ident(mono_name.clone()), SymbolId(0), field_exprs, HirType::Struct(mono_name)), Span::default())
                 } else {
-                    self.errors.push(SemanticError::UnknownType { name: mono_name.clone() });
+                    self.errors.push(SemanticError::UnknownType { name: mono_name.clone(), span: self.node_span(struct_expr) });
                     HirExpr::new(HirExprKind::Error, Span::default())
                 }
             }
@@ -1317,7 +1380,7 @@ impl LoweringContext {
                     if let Some(idx) = variants.iter().position(|v| v == &field_name) {
                         HirExpr::new(HirExprKind::EnumVariant(enum_name.clone(), field_name, idx as u64, HirType::Enum(enum_name)), Span::default())
                     } else {
-                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant {} in enum {}", field_name, enum_name) });
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant {} in enum {}", field_name, enum_name), span: self.node_span(field_expr) });
                         HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else if is_variant_case {
@@ -1327,11 +1390,11 @@ impl LoweringContext {
                         if payload_tys.is_empty() {
                             HirExpr::new(HirExprKind::VariantConstructor(variant_name.clone(), case_name.clone(), Vec::new(), HirType::Variant(variant_name)), Span::default())
                         } else {
-                            self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {} requires parameters", field_name, variant_name) });
+                            self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {} requires parameters", field_name, variant_name), span: self.node_span(field_expr) });
                             HirExpr::new(HirExprKind::Error, Span::default())
                         }
                     } else {
-                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", field_name, variant_name) });
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("variant case {} in variant {}", field_name, variant_name), span: self.node_span(field_expr) });
                         HirExpr::new(HirExprKind::Error, Span::default())
                     }
                 } else {
@@ -1341,14 +1404,14 @@ impl LoweringContext {
                             if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == &field_name) {
                                 HirExpr::new(HirExprKind::FieldAccess(Box::new(base), field_name, def_ty.clone()), Span::default())
                             } else {
-                                self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", field_name, s_name) });
+                                self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", field_name, s_name), span: self.node_span(field_expr) });
                                 HirExpr::new(HirExprKind::Error, Span::default())
                             }
                         } else {
                             HirExpr::new(HirExprKind::Error, Span::default())
                         }
                     } else if base.ty() != HirType::Error {
-                        self.errors.push(SemanticError::UndefinedVariable { name: format!("field access on non-struct type {:?}", base.ty()) });
+                        self.errors.push(SemanticError::UndefinedVariable { name: format!("field access on non-struct type {:?}", base.ty()), span: self.node_span(field_expr) });
                         HirExpr::new(HirExprKind::Error, Span::default())
                     } else {
                         HirExpr::new(HirExprKind::Error, Span::default())
@@ -1383,6 +1446,7 @@ impl LoweringContext {
                             self.errors.push(SemanticError::TypeMismatch {
                                 expected: ret_ty.clone(),
                                 found: arm_expr.ty(),
+                                span: self.node_span(match_expr),
                             });
                         }
                     }
@@ -1400,6 +1464,7 @@ impl LoweringContext {
                             self.errors.push(SemanticError::TypeMismatch {
                                 expected: ty.clone(),
                                 found: el.ty(),
+                                span: self.node_span(arr),
                             });
                         }
                     }
@@ -1411,19 +1476,19 @@ impl LoweringContext {
                 let index = idx.index().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 
                 if index.ty() != HirType::Error && index.ty() != HirType::I32 {
-                    // Assuming indices are i32 for now
                     self.errors.push(SemanticError::TypeMismatch {
                         expected: HirType::I32,
                         found: index.ty(),
+                        span: self.node_span(idx),
                     });
                 }
-                
+
                 let ret_ty = match base.ty() {
                     HirType::Array(inner, _) => *inner,
                     HirType::Slice(inner) => *inner,
                     HirType::Error => HirType::Error,
                     other => {
-                        self.errors.push(SemanticError::Custom(format!("Cannot index into type {:?}", other)));
+                        self.errors.push(SemanticError::Custom { message: format!("Cannot index into type {:?}", other), span: self.node_span(idx) });
                         HirType::Error
                     }
                 };
@@ -1436,18 +1501,18 @@ impl LoweringContext {
                 let end = slc.end().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 
                 if start.ty() != HirType::Error && start.ty() != HirType::I32 {
-                    self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: start.ty() });
+                    self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: start.ty(), span: self.node_span(slc) });
                 }
                 if end.ty() != HirType::Error && end.ty() != HirType::I32 {
-                    self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: end.ty() });
+                    self.errors.push(SemanticError::TypeMismatch { expected: HirType::I32, found: end.ty(), span: self.node_span(slc) });
                 }
-                
+
                 let ret_ty = match base.ty() {
                     HirType::Array(inner, _) => HirType::Slice(inner),
                     HirType::Slice(inner) => HirType::Slice(inner),
                     HirType::Error => HirType::Error,
                     other => {
-                        self.errors.push(SemanticError::Custom(format!("Cannot slice type {:?}", other)));
+                        self.errors.push(SemanticError::Custom { message: format!("Cannot slice type {:?}", other), span: self.node_span(slc) });
                         HirType::Error
                     }
                 };
@@ -1461,7 +1526,7 @@ impl LoweringContext {
                     *(ok.clone())
                 } else {
                     if ty != HirType::Error {
-                        self.errors.push(SemanticError::Custom(format!("Cannot use ? operator on non-Result type {:?}", ty)));
+                        self.errors.push(SemanticError::Custom { message: format!("Cannot use ? operator on non-Result type {:?}", ty), span: self.node_span(try_expr) });
                     }
                     HirType::Error
                 };
@@ -1470,7 +1535,7 @@ impl LoweringContext {
             ast::Expr::RefExpr(ref_expr) => {
                 let inner = ref_expr.expr().map(|e| self.lower_expr(&e)).unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                 if !inner.is_lvalue() && inner.ty() != HirType::Error {
-                    self.errors.push(SemanticError::Custom("Cannot take address of non-lvalue expression".to_string()));
+                    self.errors.push(SemanticError::Custom { message: "Cannot take address of non-lvalue expression".to_string(), span: self.node_span(ref_expr) });
                     return HirExpr::new(HirExprKind::Error, Span::default());
                 }
                 let is_mut = ref_expr.is_mut();
@@ -1483,13 +1548,13 @@ impl LoweringContext {
                     HirType::Ref(t, _) => *t,
                     HirType::Ptr(t, _) => {
                         if !self.in_unsafe_block {
-                            self.errors.push(SemanticError::Custom("Dereference of raw pointer requires unsafe block".to_string()));
+                            self.errors.push(SemanticError::Custom { message: "Dereference of raw pointer requires unsafe block".to_string(), span: self.node_span(deref_expr) });
                         }
                         *t
                     },
                     HirType::Error => HirType::Error,
                     other => {
-                        self.errors.push(SemanticError::Custom(format!("Cannot dereference non-pointer type {:?}", other)));
+                        self.errors.push(SemanticError::Custom { message: format!("Cannot dereference non-pointer type {:?}", other), span: self.node_span(deref_expr) });
                         HirType::Error
                     }
                 };
@@ -1581,7 +1646,7 @@ impl LoweringContext {
                         if params.len() == 1 {
                             params[0].2.clone()
                         } else {
-                            self.errors.push(SemanticError::Custom("choose quantifier must have exactly one parameter".to_string()));
+                            self.errors.push(SemanticError::Custom { message: "choose quantifier must have exactly one parameter".to_string(), span: self.node_span(quant) });
                             HirType::Error
                         }
                     }
@@ -1599,6 +1664,7 @@ impl LoweringContext {
                 self.errors.push(SemanticError::TypeMismatch {
                     expected: HirType::Bool,
                     found: c_expr.ty(),
+                    span: self.node_span(if_expr),
                 });
             }
             c_expr
@@ -1772,6 +1838,7 @@ mod tests {
             source: src.to_string(),
             ast: source_file,
             has_errors: false,
+            parse_errors: Vec::new(),
         });
         workspace.entry_file_id = 0;
         

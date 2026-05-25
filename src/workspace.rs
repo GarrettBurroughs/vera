@@ -14,6 +14,8 @@ pub struct FileData {
     pub source: String,
     pub ast: SourceFile,
     pub has_errors: bool,
+    /// Parse errors as `(message, byte_offset)` pairs from the parser.
+    pub parse_errors: Vec<(String, u32)>,
 }
 
 #[derive(Debug)]
@@ -137,8 +139,8 @@ impl Workspace {
     /// Useful for LSP text-sync and unit tests.
     pub fn load_from_source(&mut self, path: &Path, source: String) -> FileId {
         let parser = crate::parser::Parser::new_with_mode(&source, self.parse_mode);
-        let (cst, errors) = parser.parse();
-        let has_errors = !errors.is_empty();
+        let (cst, parse_errors) = parser.parse();
+        let has_errors = !parse_errors.is_empty();
         let ast = SourceFile::cast(cst).expect("root must be SourceFile");
         let file_id = self.next_file_id;
         self.next_file_id += 1;
@@ -147,6 +149,7 @@ impl Workspace {
             source,
             ast,
             has_errors,
+            parse_errors,
         });
         file_id
     }
@@ -155,27 +158,29 @@ impl Workspace {
         let source = std::fs::read_to_string(path).map_err(|_| FileNotFound { path: path.to_path_buf() })?;
 
         let parser = crate::parser::Parser::new_with_mode(&source, self.parse_mode);
-        let (cst, errors) = parser.parse();
-        
-        let has_errors = !errors.is_empty();
+        let (cst, parse_errors) = parser.parse();
+
+        let has_errors = !parse_errors.is_empty();
         if has_errors {
-            for err in errors {
-                tracing::error!("Parse Error in {}: {}", path.display(), err);
+            for (msg, offset) in &parse_errors {
+                let (line, col) = crate::diagnostics::byte_offset_to_position(&source, *offset);
+                tracing::error!("Parse Error in {}:{}:{}: {}", path.display(), line + 1, col + 1, msg);
             }
         }
-        
+
         let ast = SourceFile::cast(cst).expect("Root is not a SourceFile");
-        
+
         let file_id = self.next_file_id;
         self.next_file_id += 1;
-        
+
         self.files.insert(file_id, FileData {
             path: path.to_path_buf(),
             source,
             ast,
             has_errors,
+            parse_errors,
         });
-        
+
         Ok(file_id)
     }
 }
