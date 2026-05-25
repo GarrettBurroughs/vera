@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use crate::parser::ast::{SourceFile, AstNode, ImportDecl};
 use crate::parser::syntax::SyntaxNode;
+use crate::parser::ParseMode;
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
@@ -15,11 +16,12 @@ pub struct FileData {
     pub has_errors: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Workspace {
     pub files: BTreeMap<FileId, FileData>,
     pub entry_file_id: FileId,
     next_file_id: FileId,
+    parse_mode: ParseMode,
 }
 
 #[derive(Error, Debug, Diagnostic)]
@@ -28,12 +30,29 @@ pub struct FileNotFound {
     path: PathBuf,
 }
 
+impl Default for Workspace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Workspace {
+    /// Creates a lossless workspace that retains all trivia (for LSP and tooling).
     pub fn new() -> Self {
+        Self::new_with_mode(ParseMode::Lossless)
+    }
+
+    /// Creates a strip-mode workspace that discards trivia for smaller CSTs (for CLI builds).
+    pub fn new_strip() -> Self {
+        Self::new_with_mode(ParseMode::Strip)
+    }
+
+    fn new_with_mode(parse_mode: ParseMode) -> Self {
         Self {
             files: BTreeMap::new(),
             entry_file_id: 0,
             next_file_id: 1,
+            parse_mode,
         }
     }
 
@@ -112,7 +131,7 @@ impl Workspace {
     /// Load a file from an in-memory source string, bypassing disk I/O.
     /// Useful for LSP text-sync and unit tests.
     pub fn load_from_source(&mut self, path: &Path, source: String) -> FileId {
-        let parser = crate::parser::Parser::new(&source);
+        let parser = crate::parser::Parser::new_with_mode(&source, self.parse_mode);
         let (cst, errors) = parser.parse();
         let has_errors = !errors.is_empty();
         let ast = SourceFile::cast(cst).expect("root must be SourceFile");
@@ -129,8 +148,8 @@ impl Workspace {
 
     fn load_file(&mut self, path: &Path) -> miette::Result<FileId> {
         let source = std::fs::read_to_string(path).map_err(|_| FileNotFound { path: path.to_path_buf() })?;
-        
-        let parser = crate::parser::Parser::new(&source);
+
+        let parser = crate::parser::Parser::new_with_mode(&source, self.parse_mode);
         let (cst, errors) = parser.parse();
         
         let has_errors = !errors.is_empty();
@@ -153,5 +172,77 @@ impl Workspace {
         });
         
         Ok(file_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::syntax::SyntaxKind;
+
+    /// Workspace created with `new_strip` must produce CSTs free of trivia tokens.
+    #[test]
+    fn test_workspace_strip_mode_no_trivia() {
+        let mut ws = Workspace::new_strip();
+        let id = ws.load_from_source(
+            Path::new("test.vera"),
+            "// comment\nfunc main(): i32 { return 42; }".to_string(),
+        );
+
+        let file = ws.files.get(&id).unwrap();
+
+        fn has_trivia(node: &crate::parser::syntax::SyntaxNode) -> bool {
+            for child in node.children_with_tokens() {
+                match child {
+                    rowan::NodeOrToken::Token(t) => {
+                        if matches!(t.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                            return true;
+                        }
+                    }
+                    rowan::NodeOrToken::Node(n) => {
+                        if has_trivia(&n) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        let cst = file.ast.syntax();
+        assert!(!has_trivia(cst), "Workspace in strip mode must produce trivia-free CSTs");
+    }
+
+    /// Workspace created with `new` (lossless) must retain trivia tokens.
+    #[test]
+    fn test_workspace_lossless_mode_has_trivia() {
+        let mut ws = Workspace::new();
+        let id = ws.load_from_source(
+            Path::new("test.vera"),
+            "// comment\nfunc main(): i32 { return 42; }".to_string(),
+        );
+
+        let file = ws.files.get(&id).unwrap();
+
+        fn has_trivia(node: &crate::parser::syntax::SyntaxNode) -> bool {
+            for child in node.children_with_tokens() {
+                match child {
+                    rowan::NodeOrToken::Token(t) => {
+                        if matches!(t.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                            return true;
+                        }
+                    }
+                    rowan::NodeOrToken::Node(n) => {
+                        if has_trivia(&n) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        let cst = file.ast.syntax();
+        assert!(has_trivia(cst), "Lossless workspace must retain trivia tokens");
     }
 }
