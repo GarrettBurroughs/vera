@@ -7,8 +7,20 @@ use syntax::{SyntaxKind, SyntaxNode};
 use sink::{Event, Sink};
 use logos::Logos;
 
+/// Controls whether the parser retains trivia (whitespace and comments) in the CST.
+///
+/// Use `Lossless` for LSP and any tooling that needs source-faithful output.
+/// Use `Strip` for CLI builds (`build`/`run`/`check`) to reduce CST memory overhead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseMode {
+    /// Retain all whitespace and comment tokens (required for the LSP).
+    Lossless,
+    /// Discard whitespace and comment tokens at lex time for smaller CSTs.
+    Strip,
+}
+
 /// The Vera Parser.
-/// It consumes a string of source code and constructs a Lossless Concrete Syntax Tree (CST)
+/// It consumes a string of source code and constructs a Concrete Syntax Tree (CST)
 /// using rowan via an event-driven sink architecture.
 pub struct Parser<'a> {
     tokens: Vec<(SyntaxKind, &'a str)>,
@@ -16,13 +28,21 @@ pub struct Parser<'a> {
     events: Vec<Event>,
     forbid_struct_expr: bool,
 }
-    
+
 pub struct Marker(usize);
 pub struct CompletedMarker(usize);
 
 impl<'a> Parser<'a> {
-    /// Initializes the parser by lexing the entire input upfront.
+    /// Initializes the parser in `Lossless` mode, retaining all trivia tokens.
     pub fn new(input: &'a str) -> Self {
+        Self::new_with_mode(input, ParseMode::Lossless)
+    }
+
+    /// Initializes the parser with the given `ParseMode`.
+    ///
+    /// In `Strip` mode, whitespace and comment tokens are discarded during lexing,
+    /// producing a leaner CST suited for CLI compilation.
+    pub fn new_with_mode(input: &'a str, mode: ParseMode) -> Self {
         let mut lexer = Token::lexer(input);
         let mut tokens = Vec::new();
         while let Some(res) = lexer.next() {
@@ -30,9 +50,14 @@ impl<'a> Parser<'a> {
                 Ok(t) => SyntaxKind::from(t),
                 Err(_) => SyntaxKind::ErrorToken,
             };
+            if mode == ParseMode::Strip
+                && matches!(kind, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment)
+            {
+                continue;
+            }
             tokens.push((kind, lexer.slice()));
         }
-        
+
         Self {
             tokens,
             cursor: 0,
@@ -1224,6 +1249,35 @@ mod tests {
 
     fn parse(input: &str) -> (SyntaxNode, Vec<String>) {
         Parser::new(input).parse()
+    }
+
+    /// Strip mode must produce a CST that contains zero Whitespace, Comment,
+    /// or BlockComment nodes — even when the source is full of trivia.
+    #[test]
+    fn test_strip_mode_no_trivia_in_cst() {
+        let input = "// header comment\nfunc main(): i32 { /* inline */ return 42; }";
+        let (cst, errors) = Parser::new_with_mode(input, ParseMode::Strip).parse();
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+
+        fn has_trivia(node: &SyntaxNode) -> bool {
+            for child in node.children_with_tokens() {
+                match child {
+                    rowan::NodeOrToken::Token(t) => {
+                        if matches!(t.kind(), SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::BlockComment) {
+                            return true;
+                        }
+                    }
+                    rowan::NodeOrToken::Node(n) => {
+                        if has_trivia(&n) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        assert!(!has_trivia(&cst), "CST in Strip mode must contain no trivia tokens");
     }
 
     #[test]
