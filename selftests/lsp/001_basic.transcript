@@ -3,6 +3,7 @@ EXPECT: {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"definitionProvider":t
 SEND: {"jsonrpc":"2.0","method":"initialized","params":{}}
 SEND: {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test.vera","languageId":"vera","version":1,"text":"func main(): i32 {\n    return 0;\n}"}}}
 EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"$WORKSPACE_ROOT/test.vera"}}
+EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"$WORKSPACE_ROOT/test.vera"}}
 SEND: {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test.vera"},"range":{"start":{"line":0,"character":0},"end":{"line":2,"character":1}}}}
 EXPECT: {"id":2,"jsonrpc":"2.0","result":[{"label":"✓ verified"}]}
 SEND: {"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}

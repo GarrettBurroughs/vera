@@ -68,6 +68,8 @@ fn test_lsp_transcripts() {
             let line = line.trim();
             if line.is_empty() || line.starts_with("//") { continue; }
             
+            eprintln!("PROCESSING LINE: {}", line);
+            
             if line.starts_with("SEND: ") {
                 let msg = &line[6..];
                 write!(stdin, "Content-Length: {}\r\n\r\n{}", msg.len(), msg).unwrap();
@@ -81,6 +83,8 @@ fn test_lsp_transcripts() {
                     failures.push(format!("{}:{} Failed to read response: {}", path.display(), line_idx+1, e));
                     break;
                 }
+                
+                eprintln!("RECEIVED HEAD: {:?}", out_line);
                 
                 if out_line.is_empty() {
                     failures.push(format!("{}:{} Unexpected EOF from server", path.display(), line_idx+1));
@@ -99,6 +103,7 @@ fn test_lsp_transcripts() {
                 std::io::Read::read_exact(&mut stdout, &mut buf).unwrap();
                 
                 let actual_json: Value = serde_json::from_slice(&buf).unwrap();
+                eprintln!("RECEIVED JSON: {}", actual_json);
                 if let Err(e) = json_subset_match(&expected_json, &actual_json) {
                     failures.push(format!("{}:{} Match failed: {}\nExpected: {}\nActual: {}", path.display(), line_idx+1, e, expected_json, actual_json));
                     break;

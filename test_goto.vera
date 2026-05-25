@@ -1,0 +1,8 @@
+func helper(x: i32): i32 {
+    return x;
+}
+
+func main(): i32 {
+    let y: i32 = helper(42);
+    return y;
+}

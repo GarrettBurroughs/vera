@@ -879,6 +879,7 @@ name = "verify"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "inkwell",
  "logos",
  "lsp-server",

@@ -234,6 +234,26 @@ impl QueryContext {
         Ok(())
     }
 
+    pub fn query_verify_all(&mut self) -> std::collections::BTreeMap<String, Result<(), VerificationError>> {
+        self.ensure_hir_fresh();
+        let func_names: Vec<String> = self
+            .hir_cache
+            .as_ref()
+            .unwrap()
+            .program
+            .functions
+            .iter()
+            .filter(|f| f.body.is_some())
+            .map(|f| f.name.clone())
+            .collect();
+
+        let mut results = std::collections::BTreeMap::new();
+        for func_name in func_names {
+            results.insert(func_name.clone(), self.query_verify_function(&func_name).clone());
+        }
+        results
+    }
+
     // -------------------------------------------------------------------------
     // Introspection (mostly for tests and LSP diagnostics)
     // -------------------------------------------------------------------------

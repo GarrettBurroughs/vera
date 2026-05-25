@@ -3,6 +3,7 @@ EXPECT: {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"definitionProvider":t
 SEND: {"jsonrpc":"2.0","method":"initialized","params":{}}
 SEND: {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test_goto.vera","languageId":"vera","version":1,"text":"func helper(x: i32): i32 {\n    return x;\n}\n\nfunc main(): i32 {\n    var y: i32 = helper(42);\n    return y;\n}"}}}
 EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"$WORKSPACE_ROOT/test_goto.vera"}}
+EXPECT: {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[],"uri":"$WORKSPACE_ROOT/test_goto.vera"}}
 // Test 1: Go-to-definition on 'helper' at line 5, char 18
 SEND: {"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"$WORKSPACE_ROOT/test_goto.vera"},"position":{"line":5,"character":18}}}
 EXPECT: {"id":2,"jsonrpc":"2.0","result":{"uri":"$WORKSPACE_ROOT/test_goto.vera","range":{"start":{"line":0,"character":5},"end":{"line":0,"character":11}}}}
