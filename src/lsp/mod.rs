@@ -3,7 +3,7 @@ use lsp_types::{
     InitializeParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, DidOpenTextDocumentParams, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, Diagnostic, DiagnosticSeverity, Range, Position,
-    PublishDiagnosticsParams,
+    PublishDiagnosticsParams, InlayHint, InlayHintLabel, InlayHintParams,
 };
 use lsp_server::{Connection, Message, Request, RequestId, Response};
 use tracing::info;
@@ -21,6 +21,7 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
                 ..Default::default()
             },
         )),
+        inlay_hint_provider: Some(lsp_types::OneOf::Left(true)),
         ..Default::default()
     })
     .unwrap();
@@ -42,25 +43,71 @@ fn main_loop(
 
     let mut qctx = crate::query::QueryContext::new();
 
-    let mut log_f = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/lsp.log").unwrap();
-    use std::io::Write;
-
     for msg in &connection.receiver {
-        writeln!(log_f, "Got message: {:?}", msg).unwrap();
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
-                    writeln!(log_f, "Shutdown handled").unwrap();
                     return Ok(());
                 }
-                writeln!(log_f, "Got request: {:?}", req).unwrap();
-                // Dispatch requests
+                
+                if req.method == "textDocument/inlayHint" {
+                    let params: InlayHintParams = serde_json::from_value(req.params).unwrap();
+                    let uri = params.text_document.uri;
+                    let uri_str = uri.to_string();
+                    let path_str = if uri_str.starts_with("file://") {
+                        uri_str[7..].to_string()
+                    } else {
+                        uri_str.clone()
+                    };
+                    let path = std::path::PathBuf::from(path_str);
+                    
+                    let mut hints = Vec::new();
+                    
+                    if let Some(&file_id) = qctx.workspace().files.iter().find_map(|(id, f)| {
+                        if f.path == path { Some(id) } else { None }
+                    }) {
+                        // Ensure HIR is fresh so we can iterate functions
+                        qctx.query_hir_program();
+                        
+                        let (hir_program, _) = qctx.query_hir_program();
+                        let funcs: Vec<_> = hir_program.functions.iter()
+                            .filter(|f| f.span.file_id == file_id && f.body.is_some())
+                            .map(|f| (f.name.clone(), f.span))
+                            .collect();
+                            
+                        let source = qctx.workspace().files.get(&file_id).unwrap().source.clone();
+                            
+                        for (func_name, span) in funcs {
+                            if !span.is_unknown() {
+                                let (line, col) = crate::diagnostics::byte_offset_to_position(&source, span.start);
+                                
+                                let status_text = match qctx.query_verify_function(&func_name) {
+                                    Ok(_) => "✓ verified",
+                                    Err(_) => "✗ failed",
+                                };
+                                
+                                hints.push(InlayHint {
+                                    position: Position { line, character: col },
+                                    label: InlayHintLabel::String(status_text.to_string()),
+                                    kind: None,
+                                    text_edits: None,
+                                    tooltip: None,
+                                    padding_left: Some(true),
+                                    padding_right: Some(true),
+                                    data: None,
+                                });
+                            }
+                        }
+                    }
+                    
+                    let result = serde_json::to_value(hints).unwrap();
+                    let resp = Response { id: req.id, result: Some(result), error: None };
+                    connection.sender.send(Message::Response(resp)).unwrap();
+                }
             }
-            Message::Response(resp) => {
-                writeln!(log_f, "Got response: {:?}", resp).unwrap();
+            Message::Response(_resp) => {
             }
             Message::Notification(not) => {
-                writeln!(log_f, "Got notification: {:?}", not).unwrap();
                 // Dispatch notifications
                 match not.method.as_str() {
                     "textDocument/didOpen" => {
@@ -75,9 +122,7 @@ fn main_loop(
                         };
                         let path = std::path::PathBuf::from(path_str);
                         let _file_id = qctx.load_from_source(&path, params.text_document.text);
-                        writeln!(log_f, "loaded source, syncing diag...").unwrap();
                         sync_diagnostics(&connection, &mut qctx, &path, uri);
-                        writeln!(log_f, "sync_diagnostics done").unwrap();
                     }
                     "textDocument/didChange" => {
                         let mut params: DidChangeTextDocumentParams =
@@ -95,11 +140,8 @@ fn main_loop(
                             if let Some(&file_id) = qctx.workspace().files.iter().find_map(|(id, f)| {
                                 if f.path == path { Some(id) } else { None }
                             }) {
-                                writeln!(log_f, "updating source...").unwrap();
                                 qctx.update_file_source(file_id, change.text);
-                                writeln!(log_f, "syncing diag...").unwrap();
                                 sync_diagnostics(&connection, &mut qctx, &path, uri);
-                                writeln!(log_f, "syncing diag done").unwrap();
                             }
                         }
                     }
@@ -114,13 +156,10 @@ fn main_loop(
             }
         }
     }
-    writeln!(log_f, "querying verify program done!").unwrap();
     Ok(())
 }
 
 fn sync_diagnostics(connection: &Connection, qctx: &mut crate::query::QueryContext, path: &std::path::Path, uri: lsp_types::Uri) {
-    let mut log_f = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/lsp.log").unwrap();
-    use std::io::Write;
     
     let file_id = qctx.workspace().files.iter().find_map(|(id, f)| {
         if f.path == path { Some(*id) } else { None }
@@ -154,9 +193,7 @@ fn sync_diagnostics(connection: &Connection, qctx: &mut crate::query::QueryConte
         }
     }
     
-    writeln!(log_f, "querying hir program...").unwrap();
     let (_, semantic_errors) = qctx.query_hir_program();
-    writeln!(log_f, "querying hir program done!").unwrap();
     for err in semantic_errors {
         let span = err.span();
         if span.file_id == file_id && !span.is_unknown() {
@@ -179,9 +216,7 @@ fn sync_diagnostics(connection: &Connection, qctx: &mut crate::query::QueryConte
         }
     }
     
-    writeln!(log_f, "querying borrow check...").unwrap();
     let borrow_errors = qctx.query_borrow_check();
-    writeln!(log_f, "querying borrow check done!").unwrap();
     for err in borrow_errors {
         let span = err.span();
         if span.file_id == file_id && !span.is_unknown() {
@@ -204,9 +239,7 @@ fn sync_diagnostics(connection: &Connection, qctx: &mut crate::query::QueryConte
         }
     }
     
-    writeln!(log_f, "querying verify program...").unwrap();
     if let Err(err) = qctx.query_verify_program() {
-        writeln!(log_f, "verify program returned err").unwrap();
         let span = err.span();
         if span.file_id == file_id && !span.is_unknown() {
             let (start_line, start_col) = crate::diagnostics::byte_offset_to_position(&source, span.start);
@@ -227,7 +260,6 @@ fn sync_diagnostics(connection: &Connection, qctx: &mut crate::query::QueryConte
             });
         }
     }
-    writeln!(log_f, "querying verify program done!").unwrap();
     
     let not = lsp_server::Notification::new(
         "textDocument/publishDiagnostics".to_string(),
@@ -237,7 +269,5 @@ fn sync_diagnostics(connection: &Connection, qctx: &mut crate::query::QueryConte
             version: None,
         },
     );
-    let mut log_f = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/lsp.log").unwrap();
-    writeln!(log_f, "Sending publishDiagnostics: {:?}", not).unwrap();
     let _ = connection.sender.send(Message::Notification(not));
 }
