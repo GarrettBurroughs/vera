@@ -11,6 +11,17 @@ mod workspace;
 mod query;
 use crate::parser::ast::AstNode;
 
+/// Write `content` to `--emit-out <file>` if specified, otherwise to stdout.
+fn emit_output(emit_out: Option<&str>, content: &str) {
+    if let Some(path) = emit_out {
+        std::fs::write(path, content).unwrap_or_else(|e| {
+            eprintln!("Failed to write emit output to {path}: {e}");
+        });
+    } else {
+        println!("{content}");
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "vera")]
 #[command(about = "Vera Language Compiler", long_about = None)]
@@ -81,16 +92,43 @@ fn setup_logging(cli: &Cli) {
 fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Option<String>) -> Result<String, ()> {
     info!("Starting compilation for {}", file);
 
+    let emit = cli.emit.as_deref();
+    let emit_out = cli.emit_out.as_deref();
+
+    // --emit=tokens: lex the entry file in lossless mode and dump the token stream.
+    // This runs before the main pipeline so trivia tokens are included.
+    if emit == Some("tokens") {
+        use logos::Logos;
+        use crate::lexer::Token;
+        let source = std::fs::read_to_string(file).map_err(|e| {
+            error!("Failed to read {file}: {e}");
+        })?;
+        let mut out = String::new();
+        for res in Token::lexer(&source) {
+            match res {
+                Ok(tok) => out.push_str(&format!("{tok:?}\n")),
+                Err(_) => out.push_str("ErrorToken\n"),
+            }
+        }
+        emit_output(emit_out, &out);
+        return Err(());
+    }
+
     // CLI builds use strip mode to discard CST trivia (whitespace/comments) for
     // lower memory usage. Lossless mode is reserved for the LSP server.
-    let mut qctx = query::QueryContext::new_strip();
+    // Exception: --emit=cst uses lossless so trivia is visible in the output.
+    let mut qctx = if emit == Some("cst") {
+        query::QueryContext::new()
+    } else {
+        query::QueryContext::new_strip()
+    };
     let entry_file_id = qctx.load_entry_file(file).map_err(|e| {
         error!("Workspace error: {:?}", e);
     })?;
 
-    if cli.emit.as_deref() == Some("cst") {
+    if emit == Some("cst") {
         let entry_data = qctx.workspace().files.get(&entry_file_id).unwrap();
-        println!("{:#?}", entry_data.ast);
+        emit_output(emit_out, &format!("{:#?}", entry_data.ast));
         return Err(());
     }
 
@@ -109,9 +147,9 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         }
     }
 
-    if cli.emit.as_deref() == Some("hir") {
+    if emit == Some("hir") {
         let (prog, _) = qctx.query_hir_program();
-        println!("{prog:#?}");
+        emit_output(emit_out, &format!("{prog:#?}"));
         return Err(());
     }
 
@@ -141,11 +179,11 @@ fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Opti
         return Ok("".to_string());
     }
 
-    if cli.emit.as_deref() == Some("llvm") {
+    if emit == Some("llvm") {
         unsafe { std::env::set_var("PRINT_IR", "1") };
     }
 
-    let emit_obj = cli.emit.as_deref() == Some("obj");
+    let emit_obj = emit == Some("obj");
     let out_path = if emit_obj {
         output_bin.unwrap_or_else(|| "a.o".to_string())
     } else {
