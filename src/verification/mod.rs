@@ -1,14 +1,33 @@
 pub mod wp;
 pub mod smt;
 
-use crate::hir::HirProgram;
+use crate::hir::{HirProgram, Span};
+use miette::Diagnostic;
+use thiserror::Error;
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // String payload fields are observed via the Debug impl in error reporting
+#[derive(Error, Debug, Clone, Diagnostic)]
 pub enum VerificationError {
-    Z3Error(String),
-    ProofFailed(String),
-    VacuousPrecondition(String),
+    #[error("Z3 Error: {message}")]
+    #[diagnostic(code(vera::z3_error))]
+    Z3Error { message: String, #[doc(hidden)] span: Span },
+
+    #[error("Verification failed: {message}")]
+    #[diagnostic(code(vera::proof_failed))]
+    ProofFailed { message: String, #[doc(hidden)] span: Span },
+
+    #[error("Vacuous precondition: {message}")]
+    #[diagnostic(code(vera::vacuous_precondition))]
+    VacuousPrecondition { message: String, #[doc(hidden)] span: Span },
+}
+
+impl VerificationError {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Z3Error { span, .. } => *span,
+            Self::ProofFailed { span, .. } => *span,
+            Self::VacuousPrecondition { span, .. } => *span,
+        }
+    }
 }
 
 /// Runs the verification pipeline on the HIR program.

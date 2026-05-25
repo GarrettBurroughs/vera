@@ -1,23 +1,36 @@
 use super::{BinaryOp};
-use crate::hir::{HirBlock, HirExpr, HirFunc, HirProgram, HirStmt, HirExprKind, HirStmtKind};
+use crate::hir::{HirBlock, HirExpr, HirFunc, HirProgram, HirStmt, HirExprKind, HirStmtKind, Span};
 use std::collections::HashSet;
+use miette::Diagnostic;
+use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Error, Debug, Clone, Diagnostic)]
 pub enum BorrowError {
-    MutableBorrowConflict(String),     // Cannot borrow as mutable because it's already borrowed
-    ImmutableBorrowConflict(String),   // Cannot borrow as immutable because it's already borrowed as mutable
-    MutatingBorrowed(String),          // Cannot mutate because it is borrowed
+    #[error("Cannot borrow `{name}` as mutable because it is already borrowed")]
+    #[diagnostic(code(vera::mutable_borrow_conflict))]
+    MutableBorrowConflict { name: String, #[doc(hidden)] span: Span },
+
+    #[error("Cannot borrow `{name}` as immutable because it is already borrowed as mutable")]
+    #[diagnostic(code(vera::immutable_borrow_conflict))]
+    ImmutableBorrowConflict { name: String, #[doc(hidden)] span: Span },
+
+    #[error("Cannot mutate `{name}` because it is currently borrowed")]
+    #[diagnostic(code(vera::mutating_borrowed))]
+    MutatingBorrowed { name: String, #[doc(hidden)] span: Span },
+
+    #[error("Cannot use moved value `{name}`")]
+    #[diagnostic(code(vera::use_moved))]
     #[allow(dead_code)]
-    UseMoved(String),                  // Cannot use moved value (optional for now)
+    UseMoved { name: String, #[doc(hidden)] span: Span },
 }
 
-impl std::fmt::Display for BorrowError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl BorrowError {
+    pub fn span(&self) -> Span {
         match self {
-            BorrowError::MutableBorrowConflict(name) => write!(f, "Cannot borrow `{}` as mutable because it is already borrowed", name),
-            BorrowError::ImmutableBorrowConflict(name) => write!(f, "Cannot borrow `{}` as immutable because it is already borrowed as mutable", name),
-            BorrowError::MutatingBorrowed(name) => write!(f, "Cannot mutate `{}` because it is currently borrowed", name),
-            BorrowError::UseMoved(name) => write!(f, "Cannot use moved value `{}`", name),
+            Self::MutableBorrowConflict { span, .. } => *span,
+            Self::ImmutableBorrowConflict { span, .. } => *span,
+            Self::MutatingBorrowed { span, .. } => *span,
+            Self::UseMoved { span, .. } => *span,
         }
     }
 }
@@ -103,14 +116,14 @@ impl BorrowChecker {
     fn check_expr(&mut self, expr: &HirExpr, ctx: &mut FuncBorrowCtx) {
         match &expr.kind {
             HirExprKind::VarRef(name, _, _) => {
-                if let Err(e) = ctx.check_read(&name.as_str()) {
+                if let Err(e) = ctx.check_read(&name.as_str(), expr.span) {
                     self.errors.push(e);
                 }
             }
             HirExprKind::BinaryOp(BinaryOp::Assign, lhs, rhs, _) => {
                 self.check_expr(rhs, ctx);
                 if let Some(name) = get_root_var(lhs)
-                    && let Err(e) = ctx.check_write(&name) {
+                    && let Err(e) = ctx.check_write(&name, expr.span) {
                         self.errors.push(e);
                     }
                 // also check the lhs itself for array indexing, field access (reads of indices)
@@ -123,10 +136,10 @@ impl BorrowChecker {
             HirExprKind::Ref(inner, is_mut, _) => {
                 if let Some(name) = get_root_var(inner) {
                     if *is_mut {
-                        if let Err(e) = ctx.borrow_mut(&name) {
+                        if let Err(e) = ctx.borrow_mut(&name, expr.span) {
                             self.errors.push(e);
                         }
-                    } else if let Err(e) = ctx.borrow_immut(&name) {
+                    } else if let Err(e) = ctx.borrow_immut(&name, expr.span) {
                         self.errors.push(e);
                     }
                 }
@@ -246,34 +259,34 @@ impl FuncBorrowCtx {
         }
     }
 
-    fn check_read(&self, name: &str) -> Result<(), BorrowError> {
+    fn check_read(&self, name: &str, span: Span) -> Result<(), BorrowError> {
         for scope in &self.scopes {
             for (borrowed, kind) in &scope.borrows {
                 if borrowed == name && *kind == BorrowKind::Mut {
-                    return Err(BorrowError::MutatingBorrowed(name.to_string()));
+                    return Err(BorrowError::MutatingBorrowed { name: name.to_string(), span });
                 }
             }
         }
         Ok(())
     }
 
-    fn check_write(&self, name: &str) -> Result<(), BorrowError> {
+    fn check_write(&self, name: &str, span: Span) -> Result<(), BorrowError> {
         for scope in &self.scopes {
             for (borrowed, _kind) in &scope.borrows {
                 if borrowed == name {
-                    return Err(BorrowError::MutatingBorrowed(name.to_string()));
+                    return Err(BorrowError::MutatingBorrowed { name: name.to_string(), span });
                 }
             }
         }
         Ok(())
     }
 
-    fn borrow_immut(&mut self, name: &str) -> Result<(), BorrowError> {
+    fn borrow_immut(&mut self, name: &str, span: Span) -> Result<(), BorrowError> {
         // Can't borrow immut if already borrowed mutably
         for scope in &self.scopes {
             for (borrowed, kind) in &scope.borrows {
                 if borrowed == name && *kind == BorrowKind::Mut {
-                    return Err(BorrowError::ImmutableBorrowConflict(name.to_string()));
+                    return Err(BorrowError::ImmutableBorrowConflict { name: name.to_string(), span });
                 }
             }
         }
@@ -283,12 +296,12 @@ impl FuncBorrowCtx {
         Ok(())
     }
 
-    fn borrow_mut(&mut self, name: &str) -> Result<(), BorrowError> {
+    fn borrow_mut(&mut self, name: &str, span: Span) -> Result<(), BorrowError> {
         // Can't borrow mut if already borrowed at all
         for scope in &self.scopes {
             for (borrowed, _kind) in &scope.borrows {
                 if borrowed == name {
-                    return Err(BorrowError::MutableBorrowConflict(name.to_string()));
+                    return Err(BorrowError::MutableBorrowConflict { name: name.to_string(), span });
                 }
             }
         }

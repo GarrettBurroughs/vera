@@ -6,6 +6,5 @@
 (declare-fun valid (Int) Bool)
 (declare-fun valid_read (Int) Bool)
 (declare-fun separated (Int Int) Bool)
-(declare-const __call_other_public_func Int)
-(assert (not (=> true (and (=> (= __call_other_public_func 42) true) (=> (not (= __call_other_public_func 42)) true)))))
+(assert (not (=> true true)))
 (check-sat)

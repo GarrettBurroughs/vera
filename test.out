@@ -1,3 +1,0 @@
-(error "line 1 column 33: Parsing function declaration. Expecting sort list '(' got :")
-(error "line 2 column 34: unknown constant __call_024_generics")
-sat

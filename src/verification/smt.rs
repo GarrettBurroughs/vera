@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::collections::BTreeSet;
 use std::process::Command;
+use crate::hir::Span;
 use super::VerificationError;
 
 /// Returns the path to the z3 binary.
@@ -153,7 +154,7 @@ impl SmtExpr {
 
 /// Checks satisfiability of the given SMT expression by shelling out to Z3.
 /// Returns Ok(true) if SAT, Ok(false) if UNSAT.
-pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
+pub fn check_sat(expr: &SmtExpr, span: Span) -> Result<bool, VerificationError> {
     // Collect variables to declare them; use BTreeSet for deterministic ordering.
     let mut vars = BTreeSet::new();
     collect_vars(expr, &mut vars);
@@ -194,15 +195,15 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| VerificationError::Z3Error(format!("Failed to spawn z3: {}", e)))?;
+        .map_err(|e| VerificationError::Z3Error { message: format!("Failed to spawn z3: {}", e), span })?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(smt_script.as_bytes())
-             .map_err(|e| VerificationError::Z3Error(format!("Failed to write to z3 stdin: {}", e)))?;
+             .map_err(|e| VerificationError::Z3Error { message: format!("Failed to write to z3 stdin: {}", e), span })?;
     }
 
     let output = child.wait_with_output()
-        .map_err(|e| VerificationError::Z3Error(format!("Failed to read z3 output: {}", e)))?;
+        .map_err(|e| VerificationError::Z3Error { message: format!("Failed to read z3 output: {}", e), span })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     
@@ -211,7 +212,7 @@ pub fn check_sat(expr: &SmtExpr) -> Result<bool, VerificationError> {
     } else if stdout.contains("sat") {
         Ok(true)
     } else {
-        Err(VerificationError::Z3Error(format!("Unexpected Z3 output: {}", stdout)))
+        Err(VerificationError::Z3Error { message: format!("Unexpected Z3 output: {}", stdout), span })
     }
 }
 

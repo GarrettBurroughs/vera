@@ -81,6 +81,7 @@ pub struct HirProgram {
 #[derive(Debug, Clone)]
 pub struct HirFunc {
     pub name: String,
+    pub span: Span,
     pub params: Vec<(String, SymbolId, HirType)>,
     pub ret_type: HirType,
     pub ret_sym_id: Option<SymbolId>,
