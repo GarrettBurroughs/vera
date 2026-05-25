@@ -53,14 +53,14 @@ This document outlines the macro-level phases required to build the complete Ver
 - [x] **Unsafe Blocks**: `unsafe { ... }` scopes for raw pointer manipulations.
 
 ### 2. Verification & SMT Integration
-- [ ] **Loop Verification**: `invariant` and `decreases` parsing, induction proofs, termination proofs.
-- [ ] **Ghost Code**: `ghost { ... }` blocks, ghost variables/parameters, ensuring complete erasure in LLVM backend.
-- [ ] **Logic Quantifiers**: `forall`, `exists`, `choose` implementations in WP and SMT-LIB2 backend.
-- [ ] **Memory Verification Models**: Heap modeling in SMT, `valid(r)`, `valid_read(r)`, `separated(p1, p2)` intrinsic predicates.
-- [ ] **Verification of Enums/Results**: WP rules for early returns (`?`) and `match` expressions.
-- [ ] **Test Directives**: Update tests (e.g. `016_for_loop.vera`, `017_try_operator.vera`, `025_refinement_types.vera`) from `verify-fail` or `run-pass` to verify their respective features once implemented.
-- [ ] **Framing Analysis**: `assigns` clauses parsing and semantics, enforcing immutability of unassigned memory in loops and functions.
-- [ ] **Precondition Vacuity Checking**: Automated `unsat` check for preconditions before function verification.
+- [x] **Loop Verification**: `invariant` and `decreases` parsing, induction proofs, termination proofs.
+- [x] **Ghost Code**: `ghost { ... }` blocks, ghost variables/parameters, ensuring complete erasure in LLVM backend.
+- [x] **Logic Quantifiers**: `forall`, `exists`, `choose` implementations in WP and SMT-LIB2 backend.
+- [x] **Memory Verification Models**: Heap modeling in SMT, `valid(r)`, `valid_read(r)`, `separated(p1, p2)` intrinsic predicates.
+- [x] **Verification of Enums/Results**: WP rules for early returns (`?`) and `match` expressions.
+- [x] **Test Directives**: Update tests (e.g. `016_for_loop.vera`, `017_try_operator.vera`, `025_refinement_types.vera`) from `verify-fail` or `run-pass` to verify their respective features once implemented.
+- [x] **Framing Analysis**: `assigns` clauses parsing and semantics, enforcing immutability of unassigned memory in loops and functions.
+- [x] **Precondition Vacuity Checking**: Automated `unsat` check for preconditions before function verification.
 
 
 ### 3. Compiler Architecture & Tools
