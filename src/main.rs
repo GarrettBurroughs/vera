@@ -10,6 +10,7 @@ mod verification;
 mod workspace;
 mod query;
 pub mod diagnostics;
+pub mod lsp;
 
 use crate::hir::lower::SemanticError;
 
@@ -265,7 +266,10 @@ fn main() -> miette::Result<()> {
             }
         }
         Commands::Lsp => {
-            info!("LSP mode requested but not yet implemented");
+            if let Err(e) = lsp::run() {
+                error!("LSP server error: {:?}", e);
+                std::process::exit(1);
+            }
         }
     }
     
