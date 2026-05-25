@@ -128,6 +128,11 @@ impl Workspace {
         None
     }
 
+    /// Returns the parse mode configured for this workspace.
+    pub fn parse_mode(&self) -> ParseMode {
+        self.parse_mode
+    }
+
     /// Load a file from an in-memory source string, bypassing disk I/O.
     /// Useful for LSP text-sync and unit tests.
     pub fn load_from_source(&mut self, path: &Path, source: String) -> FileId {

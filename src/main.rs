@@ -81,7 +81,9 @@ fn setup_logging(cli: &Cli) {
 fn run_compiler_pipeline(file: &str, cli: &Cli, is_check: bool, output_bin: Option<String>) -> Result<String, ()> {
     info!("Starting compilation for {}", file);
 
-    let mut qctx = query::QueryContext::new();
+    // CLI builds use strip mode to discard CST trivia (whitespace/comments) for
+    // lower memory usage. Lossless mode is reserved for the LSP server.
+    let mut qctx = query::QueryContext::new_strip();
     let entry_file_id = qctx.load_entry_file(file).map_err(|e| {
         error!("Workspace error: {:?}", e);
     })?;

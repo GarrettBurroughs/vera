@@ -53,9 +53,21 @@ impl Default for QueryContext {
 }
 
 impl QueryContext {
+    /// Creates a query context in lossless mode (retains trivia; use for LSP).
     pub fn new() -> Self {
         Self {
             workspace: Workspace::new(),
+            revisions: BTreeMap::new(),
+            hir_cache: None,
+            borrow_cache: None,
+            verify_cache: BTreeMap::new(),
+        }
+    }
+
+    /// Creates a query context in strip mode (discards trivia; use for CLI builds).
+    pub fn new_strip() -> Self {
+        Self {
+            workspace: Workspace::new_strip(),
             revisions: BTreeMap::new(),
             hir_cache: None,
             borrow_cache: None,
@@ -93,7 +105,7 @@ impl QueryContext {
     /// Re-parses the file in place, bumps its revision, and clears all
     /// downstream caches so the next query will recompute from scratch.
     pub fn update_file_source(&mut self, file_id: FileId, new_source: String) {
-        let parser = crate::parser::Parser::new(&new_source);
+        let parser = crate::parser::Parser::new_with_mode(&new_source, self.workspace.parse_mode());
         let (cst, errors) = parser.parse();
         let has_errors = !errors.is_empty();
         let ast = SourceFile::cast(cst).expect("root must be SourceFile");
