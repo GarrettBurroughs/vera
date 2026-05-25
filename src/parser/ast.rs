@@ -146,6 +146,23 @@ impl Stmt {
             _ => None,
         }
     }
+
+    /// Returns the underlying CST syntax node for span extraction.
+    pub fn syntax(&self) -> &SyntaxNode {
+        match self {
+            Stmt::ReturnStmt(n) => n.syntax(),
+            Stmt::LetStmt(n) => n.syntax(),
+            Stmt::ExprStmt(n) => n.syntax(),
+            Stmt::IfExpr(n) => n.syntax(),
+            Stmt::WhileStmt(n) => n.syntax(),
+            Stmt::BreakStmt(n) => n.syntax(),
+            Stmt::ContinueStmt(n) => n.syntax(),
+            Stmt::AssertStmt(n) => n.syntax(),
+            Stmt::AssumeStmt(n) => n.syntax(),
+            Stmt::ForStmt(n) => n.syntax(),
+            Stmt::GhostBlock(n) => n.syntax(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -194,6 +211,31 @@ impl Expr {
             SyntaxKind::GENERIC_INST_EXPR => GenericInstExpr::cast(node).map(Expr::GenericInstExpr),
             SyntaxKind::QUANTIFIER_EXPR => QuantifierExpr::cast(node).map(Expr::QuantifierExpr),
             _ => None,
+        }
+    }
+
+    /// Returns the underlying CST syntax node for span extraction.
+    pub fn syntax(&self) -> &SyntaxNode {
+        match self {
+            Expr::BinExpr(n) => n.syntax(),
+            Expr::PrefixExpr(n) => n.syntax(),
+            Expr::CallExpr(n) => n.syntax(),
+            Expr::StructExpr(n) => n.syntax(),
+            Expr::FieldExpr(n) => n.syntax(),
+            Expr::MatchExpr(n) => n.syntax(),
+            Expr::ArrayExpr(n) => n.syntax(),
+            Expr::IfExpr(n) => n.syntax(),
+            Expr::NameRef(n) => n.syntax(),
+            Expr::Literal(n) => n.syntax(),
+            Expr::IndexExpr(n) => n.syntax(),
+            Expr::SliceExpr(n) => n.syntax(),
+            Expr::TryExpr(n) => n.syntax(),
+            Expr::RefExpr(n) => n.syntax(),
+            Expr::DerefExpr(n) => n.syntax(),
+            Expr::UnsafeBlock(n) => n.syntax(),
+            Expr::ClosureExpr(n) => n.syntax(),
+            Expr::GenericInstExpr(n) => n.syntax(),
+            Expr::QuantifierExpr(n) => n.syntax(),
         }
     }
 }

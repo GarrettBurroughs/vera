@@ -177,6 +177,33 @@ impl LoweringContext {
         self.symbol_table.pop_scope();
     }
 
+    /// Extracts a `Span` from any CST node by reading rowan's `text_range()`.
+    ///
+    /// The returned byte offsets are accurate in lossless parse mode (LSP).
+    /// In strip mode (CLI builds) trivia is omitted from the tree so offsets
+    /// diverge from the original source — callers that need display-accurate
+    /// spans should ensure lossless mode was used.
+    pub fn node_span(&self, node: &impl ast::AstNode) -> Span {
+        let range = node.syntax().text_range();
+        Span::new(
+            self.current_file,
+            u32::from(range.start()),
+            u32::from(range.end()),
+        )
+    }
+
+    /// Extracts the span of an `ast::Stmt` enum value.
+    pub fn stmt_span(&self, stmt: &ast::Stmt) -> Span {
+        let range = stmt.syntax().text_range();
+        Span::new(self.current_file, u32::from(range.start()), u32::from(range.end()))
+    }
+
+    /// Extracts the span of an `ast::Expr` enum value.
+    pub fn expr_span(&self, expr: &ast::Expr) -> Span {
+        let range = expr.syntax().text_range();
+        Span::new(self.current_file, u32::from(range.start()), u32::from(range.end()))
+    }
+
     fn current_module_name(&self) -> String {
         self.resolver.file_to_module.get(&self.current_file).cloned().unwrap_or_default()
     }

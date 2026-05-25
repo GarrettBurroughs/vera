@@ -90,10 +90,32 @@ pub struct HirFunc {
     pub assigns: Vec<HirExpr>,
 }
 
+/// A source location within a specific file.
+///
+/// `file_id` matches `workspace::FileId`. Byte offsets (`start`, `end`) are
+/// relative to the start of that file's source text. `Span::default()` is a
+/// sentinel meaning "unknown location" — callers should use `span_of` / the
+/// `LoweringContext::node_span` helper to fill in real positions.
+///
+/// In lossless parse mode (LSP), rowan's `text_range()` gives exact offsets.
+/// In strip mode (CLI builds), rowan omits trivia so offsets differ from the
+/// original source; use lossless mode whenever spans are needed for display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
+    pub file_id: usize,
     pub start: u32,
     pub end: u32,
+}
+
+impl Span {
+    pub fn new(file_id: usize, start: u32, end: u32) -> Self {
+        Self { file_id, start, end }
+    }
+
+    /// Returns true when no real location is available (the zero sentinel).
+    pub fn is_unknown(self) -> bool {
+        self.start == 0 && self.end == 0
+    }
 }
 
 #[derive(Debug, Clone)]
