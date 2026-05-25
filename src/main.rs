@@ -9,6 +9,7 @@ mod backend;
 mod verification;
 mod workspace;
 mod query;
+pub mod diagnostics;
 use crate::parser::ast::AstNode;
 
 /// Write `content` to `--emit-out <file>` if specified, otherwise to stdout.
