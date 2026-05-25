@@ -2,7 +2,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 use std::collections::BTreeMap;
 use crate::parser::ast::{self, AstNode};
-use crate::hir::{Span, HirExprKind, HirStmtKind, HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern};
+use crate::hir::{Span, HirExprKind, HirStmtKind, HirProgram, HirFunc, HirType, HirBlock, HirStmt, HirExpr, BinaryOp, UnaryOp, HirPattern, Path, SymbolId};
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum SemanticError {
@@ -44,10 +44,64 @@ pub enum SemanticError {
     },
 }
 
-#[derive(Clone)]
-struct Scope {
-    variables: BTreeMap<String, (HirType, bool)>, // type, is_const
+
+pub struct SymbolInfo {
+    pub name: String,
+    pub ty: HirType,
+    pub is_const: bool,
 }
+
+pub struct SymbolTable {
+    next_id: u32,
+    scopes: Vec<std::collections::BTreeMap<String, SymbolId>>,
+    pub symbols: std::collections::BTreeMap<SymbolId, SymbolInfo>,
+}
+
+impl SymbolTable {
+    pub fn new() -> Self {
+        Self {
+            next_id: 1,
+            scopes: Vec::new(),
+            symbols: std::collections::BTreeMap::new(),
+        }
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(std::collections::BTreeMap::new());
+    }
+
+    pub fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    pub fn define_symbol(&mut self, name: String, ty: HirType, is_const: bool) -> SymbolId {
+        let id = SymbolId(self.next_id);
+        self.next_id += 1;
+        
+        let info = SymbolInfo {
+            name: name.clone(),
+            ty,
+            is_const,
+        };
+        
+        self.symbols.insert(id, info);
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, id);
+        }
+        id
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<(SymbolId, HirType, bool)> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(&id) = scope.get(name) {
+                let info = self.symbols.get(&id).unwrap();
+                return Some((id, info.ty.clone(), info.is_const));
+            }
+        }
+        None
+    }
+}
+
 
 #[derive(Default)]
 #[allow(dead_code)] // `traits` and `impls` fields are scaffolded for the trait system (Phase 3)
@@ -62,7 +116,7 @@ pub struct TemplateRegistry {
 
 pub struct LoweringContext {
     pub errors: Vec<SemanticError>,
-    scopes: Vec<Scope>,
+    pub symbol_table: SymbolTable,
     pub functions: BTreeMap<String, (Vec<(String, HirType)>, HirType)>, // name -> (params, ret_ty)
     pub structs: BTreeMap<String, Vec<(String, HirType)>>, // name -> fields
     pub enums: BTreeMap<String, Vec<String>>, // name -> variants
@@ -82,7 +136,7 @@ impl LoweringContext {
     pub fn new() -> Self {
         Self {
             errors: Vec::new(),
-            scopes: Vec::new(),
+            symbol_table: SymbolTable::new(),
             functions: BTreeMap::new(),
             structs: BTreeMap::new(),
             enums: BTreeMap::new(),
@@ -100,11 +154,11 @@ impl LoweringContext {
     }
 
     fn enter_scope(&mut self) {
-        self.scopes.push(Scope { variables: BTreeMap::new() });
+        self.symbol_table.push_scope();
     }
 
     fn exit_scope(&mut self) {
-        self.scopes.pop();
+        self.symbol_table.pop_scope();
     }
 
     fn request_monomorphize_struct(&mut self, name: &str, args: Vec<HirType>) -> String {
@@ -235,19 +289,12 @@ impl LoweringContext {
         monomorphized_name
     }
 
-    fn declare_var(&mut self, name: String, ty: HirType, is_const: bool) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.variables.insert(name, (ty, is_const));
-        }
+    fn declare_var(&mut self, name: String, ty: HirType, is_const: bool) -> SymbolId {
+        self.symbol_table.define_symbol(name, ty, is_const)
     }
 
-    fn lookup_var(&self, name: &str) -> Option<(HirType, bool)> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(var) = scope.variables.get(name) {
-                return Some(var.clone());
-            }
-        }
-        None
+    fn lookup_var(&self, name: &str) -> Option<(SymbolId, HirType, bool)> {
+        self.symbol_table.lookup(name)
     }
 
     fn types_compatible(&self, expected: &HirType, found: &HirType) -> bool {
@@ -448,8 +495,10 @@ impl LoweringContext {
         self.enter_scope(); // Function scope
         self.current_func_ret_type = ret_type.clone();
 
+        let mut hir_params = Vec::new();
         for (p_name, p_ty) in &params {
-            self.declare_var(p_name.clone(), p_ty.clone(), false);
+            let sym_id = self.declare_var(p_name.clone(), p_ty.clone(), false);
+            hir_params.push((p_name.clone(), sym_id, p_ty.clone()));
         }
 
         // Spec clauses (requires/ensures) are lowered AFTER entering scope and declaring
@@ -457,6 +506,7 @@ impl LoweringContext {
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
         let mut assigns = Vec::new();
+        let mut ret_sym_id = None;
         if let Some(spec) = func.spec() {
             let prev_unsafe = self.in_unsafe_block;
             self.in_unsafe_block = true;
@@ -473,9 +523,11 @@ impl LoweringContext {
             }
             
             self.enter_scope();
-            if ret_type != HirType::Void {
-                self.declare_var("result".to_string(), ret_type.clone(), true);
-            }
+            ret_sym_id = if ret_type != HirType::Void {
+                Some(self.declare_var("result".to_string(), ret_type.clone(), true))
+            } else {
+                None
+            };
             for ens in spec.ensures_clauses() {
                 if let Some(e) = ens.expr() {
                     ensures.push(self.lower_expr(&e));
@@ -495,8 +547,9 @@ impl LoweringContext {
 
         Some(HirFunc {
             name: mono_name.to_string(),
-            params,
+            params: hir_params,
             ret_type,
+            ret_sym_id,
             body,
             requires,
             ensures,
@@ -726,9 +779,9 @@ impl LoweringContext {
                     });
                 }
 
-                self.declare_var(name.clone(), declared_ty.clone(), is_const);
+                let sym_id = self.declare_var(name.clone(), declared_ty.clone(), is_const);
 
-                HirStmt::new(HirStmtKind::Let(name, is_const, declared_ty, initializer), Span::default())
+                HirStmt::new(HirStmtKind::Let(name, sym_id, is_const, declared_ty, initializer), Span::default())
             }
             ast::Stmt::ExprStmt(expr_stmt) => {
                 if let Some(expr) = expr_stmt.expr() {
@@ -808,7 +861,7 @@ impl LoweringContext {
                 };
                 
                 self.enter_scope();
-                self.declare_var(item_name.clone(), inner_ty, false); // iteration variable is not const
+                let sym_id = self.declare_var(item_name.clone(), inner_ty, false); // iteration variable is not const
                 let body = for_stmt.body().map(|b| self.lower_block(&b)).unwrap_or(HirBlock { statements: Vec::new() });
                 self.exit_scope();
                 
@@ -816,7 +869,7 @@ impl LoweringContext {
                 // If we want to support spec blocks in For loops, we would parse them here.
                 // For now we leave it empty.
                 
-                HirStmt::new(HirStmtKind::For(item_name, iterable, body, assigns), Span::default())
+                HirStmt::new(HirStmtKind::For(item_name, sym_id, iterable, body, assigns), Span::default())
             }
         }
     }
@@ -841,8 +894,8 @@ impl LoweringContext {
             }
             ast::Expr::NameRef(name_ref) => {
                 let name = name_ref.ident().map(|n| n.text().to_string()).unwrap_or_default();
-                if let Some((ty, _is_const)) = self.lookup_var(&name) {
-                    HirExpr::new(HirExprKind::VarRef(name, ty), Span::default())
+                if let Some((sym_id, ty, _is_const)) = self.lookup_var(&name) {
+                    HirExpr::new(HirExprKind::VarRef(Path::from_ident(name), sym_id, ty), Span::default())
                 } else {
                     self.errors.push(SemanticError::UndefinedVariable { name: name.clone() });
                     HirExpr::new(HirExprKind::Error, Span::default())
@@ -942,14 +995,14 @@ impl LoweringContext {
                             let arg = args.into_iter().next().unwrap_or(HirExpr::new(HirExprKind::Error, Span::default()));
                             HirExpr::new(HirExprKind::ResultErr(Box::new(arg), self.current_func_ret_type.clone()), Span::default())
                         } else if direct_name == "valid" || direct_name == "valid_read" || direct_name == "separated" {
-                            HirExpr::new(HirExprKind::Call(direct_name, args, HirType::Bool), Span::default())
+                            HirExpr::new(HirExprKind::Call(Path::from_ident(direct_name), SymbolId(0), args, HirType::Bool), Span::default())
                         } else {
                             let func_info = self.functions.get(&direct_name).cloned().unwrap();
                             if args.len() != func_info.0.len() {
                                 self.errors.push(SemanticError::Custom(format!("arity mismatch for {}", direct_name)));
                                 HirExpr::new(HirExprKind::Error, Span::default())
                             } else {
-                                HirExpr::new(HirExprKind::Call(direct_name, args, func_info.1.clone()), Span::default())
+                                HirExpr::new(HirExprKind::Call(Path::from_ident(direct_name), SymbolId(0), args, func_info.1.clone()), Span::default())
                             }
                         }
                     } else {
@@ -1002,10 +1055,10 @@ impl LoweringContext {
                     if op == BinaryOp::Assign {
                         if !lhs.is_lvalue() {
                             self.errors.push(SemanticError::Custom("invalid assignment target: not an lvalue".to_string()));
-                        } else if let HirExprKind::VarRef(name, _) = &lhs.kind
-                            && let Some((_, is_const)) = self.lookup_var(name)
+                        } else if let HirExprKind::VarRef(name, _, _) = &lhs.kind
+                            && let Some((_, _, is_const)) = self.lookup_var(&name.as_str())
                                 && is_const {
-                                    self.errors.push(SemanticError::ImmutableAssignment { name: name.clone() });
+                                    self.errors.push(SemanticError::ImmutableAssignment { name: name.to_string() });
                                 }
                     }
 
@@ -1130,7 +1183,7 @@ impl LoweringContext {
                             self.errors.push(SemanticError::UndefinedVariable { name: format!("field {} in struct {}", f_name, mono_name) });
                         }
                     }
-                    HirExpr::new(HirExprKind::StructExpr(mono_name.clone(), field_exprs, HirType::Struct(mono_name)), Span::default())
+                    HirExpr::new(HirExprKind::StructExpr(Path::from_ident(mono_name.clone()), SymbolId(0), field_exprs, HirType::Struct(mono_name)), Span::default())
                 } else {
                     self.errors.push(SemanticError::UnknownType { name: mono_name.clone() });
                     HirExpr::new(HirExprKind::Error, Span::default())
@@ -1400,8 +1453,8 @@ impl LoweringContext {
                 for param in quant.params() {
                     let name = param.name().unwrap_or_default();
                     let ty = param.ty().map(|t| self.lower_type(&t)).unwrap_or(HirType::Error);
-                    self.declare_var(name.clone(), ty.clone(), true);
-                    params.push((name, ty));
+                    let sym_id = self.declare_var(name.clone(), ty.clone(), true);
+                    params.push((name, sym_id, ty));
                 }
                 
                 let body = if let Some(b) = quant.body() {
@@ -1423,7 +1476,7 @@ impl LoweringContext {
                     crate::hir::QuantifierKind::Forall | crate::hir::QuantifierKind::Exists => HirType::Bool,
                     crate::hir::QuantifierKind::Choose => {
                         if params.len() == 1 {
-                            params[0].1.clone()
+                            params[0].2.clone()
                         } else {
                             self.errors.push(SemanticError::Custom("choose quantifier must have exactly one parameter".to_string()));
                             HirType::Error
@@ -1481,9 +1534,9 @@ impl LoweringContext {
 
 fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, captures: &mut std::collections::HashSet<String>) {
     match &expr.kind {
-        HirExprKind::VarRef(name, _) => {
-            if !bound.contains(name) {
-                captures.insert(name.clone());
+        HirExprKind::VarRef(name, _, _) => {
+            if !bound.contains(&name.as_str()) {
+                captures.insert(name.to_string());
             }
         }
         HirExprKind::BinaryOp(_, lhs, rhs, _) => {
@@ -1494,7 +1547,7 @@ fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, c
         | HirExprKind::ResultOk(inner, _) | HirExprKind::ResultErr(inner, _) | HirExprKind::FieldAccess(inner, _, _) => {
             get_captures(inner, bound, captures);
         }
-        HirExprKind::Call(_, args, _) | HirExprKind::VariantConstructor(_, _, args, _) | HirExprKind::ArrayExpr(args, _) => {
+        HirExprKind::Call(_, _, args, _) | HirExprKind::VariantConstructor(_, _, args, _) | HirExprKind::ArrayExpr(args, _) => {
             for arg in args {
                 get_captures(arg, bound, captures);
             }
@@ -1512,7 +1565,7 @@ fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, c
                 get_captures_block(b, bound, captures);
             }
         }
-        HirExprKind::StructExpr(_, fields, _) => {
+        HirExprKind::StructExpr(_, _, fields, _) => {
             for (_, e) in fields {
                 get_captures(e, bound, captures);
             }
@@ -1557,7 +1610,7 @@ fn get_captures(expr: &HirExpr, bound: &mut std::collections::HashSet<String>, c
         }
         HirExprKind::Quantifier(_, params, body, _) => {
             let mut new_bound = bound.clone();
-            for (p, _) in params {
+            for (p, _, _) in params {
                 new_bound.insert(p.clone());
             }
             get_captures(body, &mut new_bound, captures);
@@ -1570,7 +1623,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
     let mut new_bound = bound.clone();
     for stmt in &block.statements {
         match &stmt.kind {
-            HirStmtKind::Let(name, _, _, init) => {
+            HirStmtKind::Let(name, _, _, _, init) => {
                 get_captures(init, &mut new_bound, captures);
                 new_bound.insert(name.clone());
             }
@@ -1588,7 +1641,7 @@ fn get_captures_block(block: &HirBlock, bound: &mut std::collections::HashSet<St
                 }
                 get_captures_block(body, &mut new_bound, captures);
             }
-            HirStmtKind::For(name, iter, body, _) => {
+            HirStmtKind::For(name, _, iter, body, _) => {
                 get_captures(iter, &mut new_bound, captures);
                 let mut b2 = new_bound.clone();
                 b2.insert(name.clone());
@@ -1634,8 +1687,8 @@ mod tests {
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
         let f = &prog.functions[0];
         assert_eq!(f.params.len(), 2);
-        assert_eq!(f.params[0], ("a".to_string(), HirType::I32));
-        assert_eq!(f.params[1], ("b".to_string(), HirType::I32));
+        assert_eq!(f.params[0], ("a".to_string(), SymbolId(1), HirType::I32));
+        assert_eq!(f.params[1], ("b".to_string(), SymbolId(2), HirType::I32));
     }
 
     /// `const x: i32 = 1;` lowers to `HirStmt::new(HirStmtKind::Let("x", is_const=true, I32, IntLiteral(1)), Span::default())`.
@@ -1644,7 +1697,7 @@ mod tests {
         let (prog, errors) = parse_and_lower("func f(): i32 { const x: i32 = 1; return x; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
         let stmts = &prog.functions[0].body.statements;
-        if let HirStmtKind::Let(name, is_const, ty, init) = &stmts[0].kind {
+        if let HirStmtKind::Let(name, _, is_const, ty, init) = &stmts[0].kind {
             assert_eq!(name, "x");
             assert!(*is_const, "expected const binding");
             assert_eq!(*ty, HirType::I32);
@@ -1659,7 +1712,7 @@ mod tests {
     fn test_lower_var_let() {
         let (prog, errors) = parse_and_lower("func f(): i32 { var y: i32 = 2; return y; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmtKind::Let(name, is_const, _, _) = &prog.functions[0].body.statements[0].kind {
+        if let HirStmtKind::Let(name, _, is_const, _, _) = &prog.functions[0].body.statements[0].kind {
             assert_eq!(name, "y");
             assert!(!is_const, "expected mutable binding");
         } else {
@@ -1672,7 +1725,7 @@ mod tests {
     fn test_lower_type_inferred_from_initializer() {
         let (prog, errors) = parse_and_lower("func f(): i32 { const x = 42; return x; }");
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
-        if let HirStmtKind::Let(_, _, ty, _) = &prog.functions[0].body.statements[0].kind {
+        if let HirStmtKind::Let(_, _, _, ty, _) = &prog.functions[0].body.statements[0].kind {
             assert_eq!(*ty, HirType::I32, "type should be inferred as I32");
         } else {
             panic!("Expected HirStmtKind::Let");

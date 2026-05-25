@@ -1,3 +1,28 @@
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SymbolId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Path {
+    pub segments: Vec<String>,
+}
+
+impl Path {
+    pub fn from_ident(ident: String) -> Self {
+        Self { segments: vec![ident] }
+    }
+    
+    pub fn as_str(&self) -> String {
+        self.segments.join("::")
+    }
+}
+
+impl std::fmt::Display for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum HirType {
     I32,
@@ -56,8 +81,9 @@ pub struct HirProgram {
 #[derive(Debug, Clone)]
 pub struct HirFunc {
     pub name: String,
-    pub params: Vec<(String, HirType)>,
+    pub params: Vec<(String, SymbolId, HirType)>,
     pub ret_type: HirType,
+    pub ret_sym_id: Option<SymbolId>,
     pub body: HirBlock,
     pub requires: Vec<HirExpr>,
     pub ensures: Vec<HirExpr>,
@@ -89,13 +115,13 @@ impl HirStmt {
 
 #[derive(Debug, Clone)]
 pub enum HirStmtKind {
-    Let(String, bool, HirType, HirExpr), // name, is_const, type, initializer
+    Let(String, SymbolId, bool, HirType, HirExpr), // name, is_const, type, initializer
     Expr(HirExpr),
     Return(Option<HirExpr>),
     Assert(HirExpr),
     Assume(HirExpr),
     While(HirExpr, HirBlock, Vec<HirExpr>, Option<HirExpr>, Vec<HirExpr>), // condition, body, invariants, decreases, assigns
-    For(String, HirExpr, HirBlock, Vec<HirExpr>), // item_name, iterable, body, assigns
+    For(String, SymbolId, HirExpr, HirBlock, Vec<HirExpr>), // item_name, iterable, body, assigns
     Break,
     Continue,
     GhostBlock(HirBlock),
@@ -134,11 +160,11 @@ pub enum HirExprKind {
     BoolLiteral(bool, HirType),
     BinaryOp(BinaryOp, Box<HirExpr>, Box<HirExpr>, HirType),
     UnaryOp(UnaryOp, Box<HirExpr>, HirType),
-    VarRef(String, HirType),
-    Call(String, Vec<HirExpr>, HirType),
+    VarRef(Path, SymbolId, HirType),
+    Call(Path, SymbolId, Vec<HirExpr>, HirType),
     CallIndirect(Box<HirExpr>, Vec<HirExpr>, HirType), // callee, args, type
     If(Box<HirExpr>, HirBlock, Option<HirBlock>, HirType),
-    StructExpr(String, Vec<(String, HirExpr)>, HirType),
+    StructExpr(Path, SymbolId, Vec<(String, HirExpr)>, HirType),
     FieldAccess(Box<HirExpr>, String, HirType),
     #[allow(dead_code)] // enum_name and variant_name used during LLVM codegen discriminant resolution
     EnumVariant(String, String, u64, HirType), // enum_name, variant_name, value, type
@@ -154,7 +180,7 @@ pub enum HirExprKind {
     Deref(Box<HirExpr>, HirType), // inner expr, result type
     Block(HirBlock, HirType),
     Closure(Vec<String>, Box<HirExpr>, Vec<String>, HirType), // params, body, captures, type
-    Quantifier(QuantifierKind, Vec<(String, HirType)>, Box<HirExpr>, HirType), // kind, params, body, type
+    Quantifier(QuantifierKind, Vec<(String, SymbolId, HirType)>, Box<HirExpr>, HirType), // kind, params, body, type
     Error,
 }
 
@@ -165,11 +191,11 @@ impl HirExpr {
             HirExprKind::BoolLiteral(_, ty) => ty.clone(),
             HirExprKind::BinaryOp(_, _, _, ty) => ty.clone(),
             HirExprKind::UnaryOp(_, _, ty) => ty.clone(),
-            HirExprKind::VarRef(_, ty) => ty.clone(),
-            HirExprKind::Call(_, _, ty) => ty.clone(),
+            HirExprKind::VarRef(_, _, ty) => ty.clone(),
+            HirExprKind::Call(_, _, _, ty) => ty.clone(),
             HirExprKind::CallIndirect(_, _, ty) => ty.clone(),
             HirExprKind::If(_, _, _, ty) => ty.clone(),
-            HirExprKind::StructExpr(_, _, ty) => ty.clone(),
+            HirExprKind::StructExpr(_, _, _, ty) => ty.clone(),
             HirExprKind::FieldAccess(_, _, ty) => ty.clone(),
             HirExprKind::EnumVariant(_, _, _, ty) => ty.clone(),
             HirExprKind::VariantConstructor(_, _, _, ty) => ty.clone(),

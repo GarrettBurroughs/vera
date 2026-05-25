@@ -104,7 +104,7 @@ impl<'ctx> CodeGen<'ctx> {
         let ret_type = self.lower_type(&func.ret_type)?;
 
         let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
-        for (_, ty) in &func.params {
+        for (_, _, ty) in &func.params {
             let llvm_ty = self.lower_type(ty)?;
             param_types.push(llvm_ty.into());
         }
@@ -130,7 +130,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.scopes.clear();
         self.enter_scope(); // Function scope
 
-        for (i, (name, ty)) in func.params.iter().enumerate() {
+        for (i, (name, _, ty)) in func.params.iter().enumerate() {
             let param_val = llvm_func.get_nth_param(i as u32).unwrap();
             let alloca = self.builder.build_alloca(param_val.get_type(), name).unwrap();
             self.builder.build_store(alloca, param_val).unwrap();
@@ -196,7 +196,7 @@ impl<'ctx> CodeGen<'ctx> {
                     self.builder.build_return(Some(&default_val)).unwrap();
                 }
             }
-            HirStmtKind::Let(name, _is_const, ty, initializer) => {
+            HirStmtKind::Let(name, _, _is_const, ty, initializer) => {
                 let llvm_ty = self.lower_type(ty)?;
                 let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
                 self.declare_var(name.clone(), alloca, ty.clone());
@@ -235,7 +235,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // 3. Continue compiling after loop in merge block
                 self.builder.position_at_end(merge_block);
             }
-            HirStmtKind::For(item_name, iterable, body, _assigns) => {
+            HirStmtKind::For(item_name, _, iterable, body, _assigns) => {
                 let iter_val = self.compile_expr(iterable)?;
                 let iter_ty = iterable.ty();
 
@@ -332,8 +332,8 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn compile_lvalue(&mut self, expr: &HirExpr) -> Result<PointerValue<'ctx>, String> {
         match &expr.kind {
-            HirExprKind::VarRef(name, _) => {
-                if let Some((alloca, _)) = self.lookup_var(name) {
+            HirExprKind::VarRef(name, _, _) => {
+                if let Some((alloca, _)) = self.lookup_var(&name.as_str()) {
                     Ok(alloca)
                 } else {
                     Err(format!("Undefined variable in lvalue: {}", name))
@@ -387,10 +387,10 @@ impl<'ctx> CodeGen<'ctx> {
             HirExprKind::EnumVariant(_, _, val, _) => {
                 Ok(self.context.i32_type().const_int(*val, false).into())
             }
-            HirExprKind::VarRef(name, _) => {
-                if let Some((alloca, ty)) = self.lookup_var(name) {
+            HirExprKind::VarRef(name, _, _) => {
+                if let Some((alloca, ty)) = self.lookup_var(&name.as_str()) {
                     let llvm_ty = self.lower_type(&ty)?;
-                    let val = self.builder.build_load(llvm_ty, alloca, name).unwrap();
+                    let val = self.builder.build_load(llvm_ty, alloca, &name.as_str()).unwrap();
                     Ok(val)
                 } else {
                     Err(format!("Variable {} not found in LLVM codegen", name))
@@ -480,8 +480,8 @@ impl<'ctx> CodeGen<'ctx> {
                 // Return dummy value since we're using Void return for `if` statements right now.
                 Ok(self.context.i32_type().const_zero().into())
             }
-            HirExprKind::Call(name, args, _) => {
-                let llvm_func = self.module.get_function(name).ok_or(format!("Function {} not found", name))?;
+            HirExprKind::Call(name, _, args, _) => {
+                let llvm_func = self.module.get_function(&name.as_str()).ok_or(format!("Function {} not found", name))?;
                 let mut llvm_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                 for arg in args {
                     llvm_args.push(self.compile_expr(arg)?.into());
@@ -515,12 +515,12 @@ impl<'ctx> CodeGen<'ctx> {
                     inkwell::values::ValueKind::Instruction(_) => Ok(self.context.i32_type().const_zero().into()),
                 }
             }
-            HirExprKind::StructExpr(name, fields, _) => {
-                let struct_type = *self.structs.get(name).unwrap();
+            HirExprKind::StructExpr(name, _, fields, _) => {
+                let struct_type = *self.structs.get(&name.as_str()).unwrap();
                 let alloca = self.builder.build_alloca(struct_type, "struct_init").unwrap();
                 
                 for (f_name, f_expr) in fields {
-                    let layout = self.struct_layouts.get(name).unwrap();
+                    let layout = self.struct_layouts.get(&name.as_str()).unwrap();
                     let field_idx = layout.iter().position(|(n, _)| n == f_name).unwrap();
                     
                     let field_val = self.compile_expr(f_expr)?;
