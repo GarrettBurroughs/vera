@@ -28,7 +28,15 @@ Before making any changes to the codebase, you must review the existing document
 * **DO NOT use `std::collections::HashMap` or `HashSet`** if the iteration order affects the generated code, Verification Conditions, or LLVM IR. 
 * Use `std::collections::BTreeMap` or `BTreeSet` to ensure the compiler remains strictly deterministic.
 
-## 5. Skills
+## 5. Token & Context Window Management (Efficiency)
+
+To decrease token usage and speed up your workflow:
+* **Targeted Reading**: DO NOT read massive files in their entirety unless necessary. Use `grep_search` to find specific functions, structs, or symbols, and then use `view_file` with `StartLine` and `EndLine` to read only the relevant chunks.
+* **Control Terminal Output**: `cargo test` and `cargo build` can produce massive logs. When running commands you suspect will be verbose, pipe the output to a temporary file (e.g., `> output.log`) and read snippets of it, or use `head`/`tail`.
+* **Targeted Testing**: During the TDD loop, run ONLY the specific test you are working on (e.g., `cargo test --test self_tests -- 016_for_loop`) instead of the entire test suite, to avoid polluting the context window with hundreds of passing test logs.
+* **Distill Documentation Early**: At the beginning of a task, read all relevant documentation (`development.md`, `roadmap.md`, etc.) to understand the project architecture and what needs to be done. Once you understand the task, distill the relevant information and focus purely on execution. Only cross-reference the original, large documentation files again if you encounter uncertainty or ambiguity.
+
+## 6. Skills
 
 We have established specific skills to help you interact with this project. Look for them in `.gemini/skills/` or use the `view_file` tool to inspect them:
 * `run-selftests`: Instructions on executing and debugging the `selftests/` suite.
