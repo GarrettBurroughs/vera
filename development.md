@@ -28,10 +28,12 @@ Before modifying the compiler or the language, ensure you understand the archite
 
 ## 2. Coding Standards and Conventions
 
-### Rust Compiler Implementation
-* **Edition**: The compiler is written in Rust 2021.
+* **Rust Edition**: We are using Rust 2024. Use modern idioms.
 * **Formatting and Linting**: All code must pass `cargo fmt` and `cargo clippy`. Treat clippy warnings as errors during development.
-* **Error Handling**: Do **not** use `.unwrap()` or `panic!()` in the compiler unless representing a true Internal Compiler Error (ICE). Always bubble up errors using `Result` and convert them into the `Diagnostic` IR described in the LSP design docs.
+* **Error Handling**: Use `miette` for rich, contextual error messages. Return `miette::Result` from main operations.
+* **Documentation**: 
+  * Document functions so their usage is immediately clear to someone unfamiliar with the codebase (e.g., using `///` doc comments for public APIs).
+  * Do **not** comment to explain *what* the code is doing. Only add inline comments to explain *why* a specific, non-obvious design decision was made.
 * **Determinism**: The compiler must be strictly deterministic. Avoid iterating over standard `HashMap` or `HashSet` if the iteration order affects the generated code, Verification Conditions, or LLVM IR. Use `BTreeMap` or an index-mapped map instead.
 
 ### Vera Standard Library & Examples

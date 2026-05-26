@@ -1,0 +1,8 @@
+// run-pass
+
+func main() {
+    var arr: array[i32, 3] = [1, 2, 3];
+    var val: i32 = arr[0];
+    var s: slice[i32] = arr[0..3];
+    var val2: i32 = s[1];
+}

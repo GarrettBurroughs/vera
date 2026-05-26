@@ -1,0 +1,22 @@
+// run-pass
+// expect-exit-code: 0
+
+variant Option {
+    None,
+    Some(i32)
+}
+
+pub func main(): i32 {
+    const val: Option = Option.Some(42);
+    
+    const res: i32 = match val {
+        case Some(x) => x,
+        case None => 0,
+    };
+    
+    if res == 42 {
+        return 0;
+    } else {
+        return 1;
+    }
+}

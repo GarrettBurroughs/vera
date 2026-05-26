@@ -1,0 +1,10 @@
+// run-pass
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+func main(): i32 {
+    const p: Point = Point { x: 10, y: 20 };
+    return p.x + p.y - 30; // 10 + 20 - 30 = 0
+}

@@ -1,0 +1,20 @@
+// run-pass
+// expect-exit-code: 0
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+pub func main(): i32 {
+    const c1: Color = Color.Green;
+    const c2: Color = Color.Red;
+    
+    if c1 == Color.Green {
+        if c2 == Color.Red {
+            return 0;
+        }
+    }
+    return 1;
+}

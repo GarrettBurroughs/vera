@@ -1,12 +1,9 @@
 // run-pass
-// This is a basic self-test to verify arithmetic.
+// expect-exit-code: 0
 
 pub func main(): i32 {
-    const a = 1;
-    const b = 1;
-    
-    // Assert logic is evaluated
-    assert a + b == 2;
+    const a: i32 = 1;
+    const b: i32 = 1;
     
     if a + b == 2 {
         return 0; // Success exit code

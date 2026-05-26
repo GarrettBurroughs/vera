@@ -1,0 +1,20 @@
+// verify-fail
+// Refinement Types verification test
+
+type Nat = i32 where (self >= 0);
+
+func safe_divide(num: i32, den: i32 where (self != 0)): i32 {
+    return num / den;
+}
+
+func main() {
+    var x: Nat = 5;
+    
+    var y: i32 where (self > 0) = 10;
+    
+    // This should fail verification:
+    var z: Nat = -1; // expected to verify-fail
+    
+    safe_divide(10, 5);
+    // safe_divide(10, 0); // expected to verify-fail, but crashes at runtime without verification
+}

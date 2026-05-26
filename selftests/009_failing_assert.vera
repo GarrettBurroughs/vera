@@ -1,0 +1,7 @@
+// verify-fail
+
+func main(): i32 {
+    const x: i32 = 42;
+    assert x == 0;
+    return 0;
+}

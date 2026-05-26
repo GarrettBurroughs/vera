@@ -9,5 +9,12 @@ rowan = "0.15"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm17-0"] }
 clap = { version = "4.5", features = ["derive"] }
 miette = { version = "7.2", features = ["fancy"] }
-
-
+num-traits = "0.2"
+num-derive = "0.4"
+thiserror = "2.0.18"
+lsp-server = "0.7.9"
+lsp-types = "0.97.0"
+crossbeam-channel = "0.5"
+serde_json = "1.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

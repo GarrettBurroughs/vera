@@ -1,0 +1,21 @@
+// run-pass
+
+func modify_p(p: mut ptr i32)
+spec {
+    requires valid(p);
+    assigns *p;
+} {
+    unsafe {
+        *p = 100;
+    };
+}
+
+func main(): i32 {
+    var x: i32 = 42;
+    var p: ptr i32 = &mut x;
+    modify_p(p);
+    if true {
+        return 0;
+    }
+    return 1;
+}

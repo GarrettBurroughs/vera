@@ -32,7 +32,7 @@ func_decl       = visibility [ "pure" ] "func" identifier [ "[" generic_params "
 params          = [ param_decl { "," param_decl } ] ;
 param_decl      = identifier ":" type ;
 
-type_alias      = visibility "type" identifier "=" type [ "where" "(" expr ")" ] ";" ;
+type_alias      = visibility "type" identifier "=" type ";" ;
 
 trait_decl      = visibility "trait" identifier "{" { func_decl_no_body } "}" ;
 func_decl_no_body = [ "pure" ] "func" identifier "(" params ")" [ ":" type ] ";" ;
@@ -40,7 +40,9 @@ func_decl_no_body = [ "pure" ] "func" identifier "(" params ")" [ ":" type ] ";"
 impl_decl       = "impl" [ identifier "for" ] identifier "{" { func_decl } "}" ;
 
 /* Types */
-type            = primitive_type 
+type            = base_type [ "where" "(" expr ")" ] ;
+                
+base_type       = primitive_type 
                 | compound_type 
                 | pointer_type 
                 | path [ "[" type_list "]" ] ;
@@ -92,7 +94,8 @@ primary_expr    = identifier
                 | if_expr 
                 | match_expr 
                 | unsafe_block
-                | closure_expr ;
+                | closure_expr
+                | struct_expr ;
 
 args            = expr { "," expr } ;
 if_expr         = "if" expr block [ "else" ( if_expr | block ) ] ;
@@ -100,6 +103,8 @@ match_expr      = "match" expr "{" { match_case "," } [ match_case ] "}" ;
 match_case      = "case" pattern "=>" ( expr | block ) ;
 unsafe_block    = "unsafe" block ;
 closure_expr    = "|" identifier_list "|" expr ;
+struct_expr     = identifier "{" [ struct_field { "," struct_field } [ "," ] ] "}" ;
+struct_field    = identifier ":" expr ;
 
 /* Verification and Specifications */
 spec_block      = "spec" "{" { spec_stmt } "}" ;

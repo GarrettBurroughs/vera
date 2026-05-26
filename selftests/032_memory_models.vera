@@ -1,0 +1,22 @@
+// run-pass
+
+func test_memory(ptr1: ptr i32, ptr2: ptr i32)
+spec {
+    requires separated(ptr1, ptr2);
+    requires valid(ptr1);
+    requires valid_read(ptr2);
+}
+{
+    assert separated(ptr1, ptr2);
+    assert valid(ptr1);
+    assert valid_read(ptr2);
+    
+    ghost {
+        var is_sep: bool = separated(ptr1, ptr2);
+        assert is_sep;
+    }
+}
+
+func main(): i32 {
+    return 0;
+}

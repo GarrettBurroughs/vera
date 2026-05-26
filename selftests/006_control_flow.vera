@@ -1,0 +1,15 @@
+// run-pass
+// expect-exit-code: 42
+
+pub func main(): i32 {
+    var x: i32 = 10;
+    x = x + 30; // 40
+    
+    if x > 20 {
+        x = x + 2; // 42
+    } else {
+        x = x - 5;
+    }
+    
+    return x;
+}

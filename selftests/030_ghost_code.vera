@@ -1,0 +1,17 @@
+// run-pass
+
+func main() {
+    var x: i32 = 0;
+    
+    ghost {
+        var g: i32 = x;
+        g = g + 1;
+        assert g == 1;
+    }
+    
+    x = x + 1;
+    
+    ghost {
+        assert x == 1;
+    }
+}

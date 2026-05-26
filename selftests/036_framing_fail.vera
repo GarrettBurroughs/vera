@@ -1,0 +1,15 @@
+// verify-fail
+func modify_p_fail(p: ptr i32)
+spec {
+    requires valid(p);
+}
+{
+    // Should fail because p is not in assigns
+    unsafe {
+        *p = 10;
+    };
+}
+
+func main(): i32 {
+    return 0;
+}

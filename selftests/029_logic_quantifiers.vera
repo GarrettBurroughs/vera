@@ -1,0 +1,15 @@
+// run-pass
+func main() {
+    // Using forall
+    assert forall i: i32 { (i > 0 && i < 10) ==> i > 0; };
+    
+    // Using exists
+    assert exists j: i32 { j == 2; };
+    
+    // Testing multiple bound variables
+    assert forall x: i32, y: i32 { (x == 1 && y == 2) ==> x < y; };
+    
+    // Using choose
+    var c: i32 = choose k: i32 { k > 0; };
+    // We don't assert anything on `c` right now since it evaluates to an uninterpreted variable
+}

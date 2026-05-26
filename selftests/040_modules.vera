@@ -1,0 +1,11 @@
+// run-pass
+
+import mod_helper.math;
+
+func main(): i32 {
+    const res: i32 = math.add(20, 22);
+    if res == 42 {
+        return 0;
+    }
+    return 1;
+}

@@ -1,2 +1,5 @@
 /target
 *.vsix
+
+# z3 binary — installed locally via scripts/install_z3.sh, not checked in
+/tools/z3/bin/

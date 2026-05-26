@@ -1,0 +1,7 @@
+// verify-fail
+// expect-exit-code: 1
+
+pub func main(): i32 {
+    // This should fail semantic analysis because we are returning a boolean, but ret type is i32
+    return true;
+}

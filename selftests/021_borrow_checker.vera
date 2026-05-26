@@ -1,0 +1,27 @@
+// run-pass
+
+func modify_ref(p: mut ref i32)
+spec {
+    assigns *p;
+} {
+    *p = 6;
+}
+
+func main(): i32 {
+    var x: i32 = 5;
+    if true {
+        var p: mut ref i32 = &mut x;
+        modify_ref(p);
+    }
+    
+    // now we can read x
+    var y: i32 = x;
+    
+    if true {
+        var p1: ref i32 = &x;
+        var p2: ref i32 = &x;
+        var z: i32 = *p1 + *p2;
+    }
+    
+    return 0;
+}

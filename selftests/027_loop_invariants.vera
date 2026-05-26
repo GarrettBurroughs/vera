@@ -1,0 +1,23 @@
+func sum(n: i32): i32 
+spec {
+    requires n >= 0;
+    ensures result >= 0;
+} {
+    var i: i32 = 0;
+    var s: i32 = 0;
+    
+    while i < n spec {
+        invariant i >= 0;
+        invariant i <= n;
+        invariant s >= 0;
+    } {
+        s = s + i;
+        i = i + 1;
+    }
+    
+    return s;
+}
+
+func main(): i32 {
+    return 0;
+}

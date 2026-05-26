@@ -1,0 +1,8 @@
+// run-pass
+// expect-exit-code: 40
+func main(): i32 {
+    var x = 10;
+    var y = 20;
+    var add = |a: i32, b: i32| a + b + x + y;
+    return add(5, 5);
+}

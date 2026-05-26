@@ -1,0 +1,9 @@
+// other.vera
+
+func secret_func(): i32 {
+    return 42;
+}
+
+pub func public_func(): i32 {
+    return secret_func();
+}
